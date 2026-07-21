@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
-  "requestFramePermissions": [],
+  "name": "Zero-Login Secure Storage Manager",
+  "description": "A production-grade, secure zero-login storage and synchronization system protected by JNAS Master Password, featuring AES-GCM encryption, self-healing recovery snapshots, and robust offline audit logging.",
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

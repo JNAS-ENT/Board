@@ -76,6 +76,19 @@ class SyncManager {
     };
   }
 
+  regenerateRecoveryKey(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Readable chars (no O, 0, I, 1)
+    let generatedKey = '';
+    for (let i = 0; i < 16; i++) {
+      generatedKey += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    this.recoveryKey = generatedKey;
+    localStorage.setItem('jnas_recovery_key', generatedKey);
+    this.markAsModified();
+    this.notify();
+    return generatedKey;
+  }
+
   getState(): SyncState {
     return {
       workspaceId: this.workspaceId,
