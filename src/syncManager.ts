@@ -33,14 +33,12 @@ class SyncManager {
         this.updateStatus('offline');
       });
 
-      // Periodic background retry loop (every 15 seconds) to catch unsynced changes or offline recoveries
+      // Background automatic synchronization loop (every 12 seconds) to keep multiple devices/browsers in sync
       setInterval(() => {
-        const needsSync = localStorage.getItem('jnas_needs_sync') === 'true';
-        if (needsSync && navigator.onLine && this.status !== 'syncing') {
-          console.log('[Background Retry] Detected outstanding local changes. Initiating sync...');
-          this.syncNow().catch(err => console.error('[Background Retry] Sync failed:', err));
+        if (navigator.onLine && this.status !== 'syncing') {
+          this.syncNow().catch(err => console.error('[Periodic Sync] Background sync failed:', err));
         }
-      }, 15000);
+      }, 12000);
     }
   }
 

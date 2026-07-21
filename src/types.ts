@@ -33,17 +33,29 @@ export interface KanbanCard {
 
 export interface WhiteboardElement {
   id: string;
-  type: 'sticky' | 'mindmap_node' | 'connection';
+  type: 'sticky' | 'mindmap_node' | 'connection' | 'shape';
   x: number;
   y: number;
   width?: number;
   height?: number;
   text: string;
   color?: string; // Hex or tailwind color class
-  shape?: 'rectangle' | 'circle' | 'diamond';
+  shape?: string; // Shape type identifier
   fromId?: string; // For connections
   toId?: string; // For connections
   groupId?: string;
+  rotation?: number; // Rotation in degrees (e.g. 0-359)
+  locked?: boolean;
+  borderWidth?: number;
+  borderStyle?: 'solid' | 'dashed' | 'dotted';
+  fillColor?: string;
+  gradient?: boolean;
+  gradientColor?: string;
+  shadow?: boolean;
+  opacity?: number; // 0 to 100
+  roundedCorners?: boolean;
+  imageUrl?: string;
+  iconName?: string;
 }
 
 export interface ResourceMetadata {

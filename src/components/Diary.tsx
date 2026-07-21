@@ -60,6 +60,15 @@ export default function Diary({ darkMode, triggerRefresh }: DiaryProps) {
     setSelectedEntry(entry);
     setEditorTitle(entry.title);
     setEditorContent(entry.content);
+    
+    // Auto-focus the editor textarea immediately with a single click
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        const length = entry.content.length;
+        textareaRef.current.setSelectionRange(length, length);
+      }
+    }, 50);
   };
 
   // Autosave setup (Debounced 200ms saving)

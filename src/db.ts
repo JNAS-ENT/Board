@@ -647,6 +647,10 @@ Started architectural drafting of the productivity applet.
     if (data.resources) await overwriteStore('resources', data.resources);
     if (data.code_snippets) await overwriteStore('code_snippets', data.code_snippets);
     if (data.activities) await overwriteStore('activities', data.activities);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('jnas_db_updated'));
+    }
   }
 }
 
