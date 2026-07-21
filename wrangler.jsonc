@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "react-example",
+  "pages_build_output_dir": "dist",
+  "compatibility_date": "2024-05-02",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
