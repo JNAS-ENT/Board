@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview --port 3000 --host 0.0.0.0",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "deploy": "wrangler pages deploy dist",
+    "pages:dev": "wrangler pages dev dist"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -23,8 +25,7 @@
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.0",
-    "remark-gfm": "^4.0.1",
-    "vite": "^6.2.3"
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
@@ -32,6 +33,7 @@
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "wrangler": "^4.112.0"
   }
 }
