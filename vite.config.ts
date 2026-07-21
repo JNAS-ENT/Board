@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -152,6 +153,32 @@ Guidelines:
               return;
             }
 
+            // Local storage file path for persistent mock sync store
+            const SYNC_STORE_FILE = path.resolve(__dirname, 'sync-store.json');
+
+            // Helper to read sync store
+            const readSyncStore = () => {
+              if (!fs.existsSync(SYNC_STORE_FILE)) {
+                return { workspaces: {}, backups: {} };
+              }
+              try {
+                const data = fs.readFileSync(SYNC_STORE_FILE, 'utf8');
+                return JSON.parse(data);
+              } catch (err) {
+                console.error('Error reading sync store file, resetting:', err);
+                return { workspaces: {}, backups: {} };
+              }
+            };
+
+            // Helper to write sync store
+            const writeSyncStore = (data: any) => {
+              try {
+                fs.writeFileSync(SYNC_STORE_FILE, JSON.stringify(data, null, 2), 'utf8');
+              } catch (err) {
+                console.error('Error writing sync store file:', err);
+              }
+            };
+
             // Local Mock for /api/sync
             if (req.url?.startsWith('/api/sync')) {
               const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -167,11 +194,8 @@ Guidelines:
                   return;
                 }
                 
-                // Use global memory store on server instance
-                const globalStore = (global as any).__localSyncStore || new Map();
-                (global as any).__localSyncStore = globalStore;
-                
-                const cached = globalStore.get(workspaceId);
+                const store = readSyncStore();
+                const cached = store.workspaces[workspaceId];
                 if (!cached) {
                   res.statusCode = 404;
                   res.setHeader('Content-Type', 'application/json');
@@ -213,10 +237,8 @@ Guidelines:
                       return;
                     }
                     
-                    const globalStore = (global as any).__localSyncStore || new Map();
-                    (global as any).__localSyncStore = globalStore;
-                    
-                    const existing = globalStore.get(workspaceId);
+                    const store = readSyncStore();
+                    const existing = store.workspaces[workspaceId];
                     if (existing) {
                       if (existing.recoveryKey !== recoveryKey) {
                         res.statusCode = 403;
@@ -239,13 +261,254 @@ Guidelines:
                       }
                     }
                     
+                    store.workspaces[workspaceId] = { recoveryKey, dbData, updatedAt };
+                    writeSyncStore(store);
+
+                    // Sync in-memory global fallback as well
+                    const globalStore = (global as any).__localSyncStore || new Map();
                     globalStore.set(workspaceId, { recoveryKey, dbData, updatedAt });
+                    (global as any).__localSyncStore = globalStore;
                     
                     res.setHeader('Content-Type', 'application/json');
                     res.end(JSON.stringify({
                       success: true,
                       workspaceId,
                       updatedAt
+                    }));
+                  } catch (err: any) {
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: err?.message || String(err) }));
+                  }
+                });
+                return;
+              }
+            }
+
+            // Local Mock for /api/backup
+            if (req.url?.startsWith('/api/backup') && req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => {
+                body += chunk;
+              });
+              req.on('end', () => {
+                try {
+                  const parsed = JSON.parse(body);
+                  const { workspaceId, recoveryKey, dbData } = parsed;
+                  
+                  if (!workspaceId || !recoveryKey || !dbData) {
+                    res.statusCode = 400;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Missing required backup fields' }));
+                    return;
+                  }
+                  
+                  const store = readSyncStore();
+                  const existing = store.workspaces[workspaceId];
+                  if (existing && existing.recoveryKey !== recoveryKey) {
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Invalid recovery key', code: 'UNAUTHORIZED' }));
+                    return;
+                  }
+                  
+                  const backupId = crypto.randomUUID();
+                  const createdAt = new Date().toISOString();
+                  const backupEntry = { id: backupId, dbData, createdAt };
+                  
+                  if (!store.backups[workspaceId]) {
+                    store.backups[workspaceId] = [];
+                  }
+                  store.backups[workspaceId].push(backupEntry);
+                  writeSyncStore(store);
+
+                  // Keep memory in sync
+                  const globalBackups = (global as any).__localBackupStore || new Map();
+                  let devBackups = globalBackups.get(workspaceId) || [];
+                  devBackups.push(backupEntry);
+                  globalBackups.set(workspaceId, devBackups);
+                  (global as any).__localBackupStore = globalBackups;
+                  
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({
+                    success: true,
+                    workspaceId,
+                    backupId,
+                    createdAt
+                  }));
+                } catch (err: any) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: err?.message || String(err) }));
+                }
+              });
+              return;
+            }
+
+            // Local Mock for /api/restore
+            if (req.url?.startsWith('/api/restore') && req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => {
+                body += chunk;
+              });
+              req.on('end', () => {
+                try {
+                  const parsed = JSON.parse(body);
+                  const { workspaceId, recoveryKey, backupId } = parsed;
+                  
+                  if (!workspaceId || !recoveryKey) {
+                    res.statusCode = 400;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Missing required fields' }));
+                    return;
+                  }
+                  
+                  const store = readSyncStore();
+                  const existing = store.workspaces[workspaceId];
+                  if (!existing) {
+                    res.statusCode = 404;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Workspace not found', code: 'NOT_FOUND' }));
+                    return;
+                  }
+                  
+                  if (existing.recoveryKey !== recoveryKey) {
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Invalid recovery key', code: 'UNAUTHORIZED' }));
+                    return;
+                  }
+                  
+                  const devBackups = store.backups[workspaceId] || [];
+                  if (devBackups.length === 0) {
+                    res.statusCode = 404;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'No backups found', code: 'NO_BACKUPS' }));
+                    return;
+                  }
+                  
+                  let backupEntry;
+                  if (backupId) {
+                    backupEntry = devBackups.find((b: any) => b.id === backupId);
+                  } else {
+                    backupEntry = devBackups[devBackups.length - 1]; // Latest
+                  }
+                  
+                  if (!backupEntry) {
+                    res.statusCode = 404;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Backup snapshot not found', code: 'NOT_FOUND' }));
+                    return;
+                  }
+                  
+                  // Restore database on server
+                  existing.dbData = backupEntry.dbData;
+                  existing.updatedAt = backupEntry.createdAt || new Date().toISOString();
+                  store.workspaces[workspaceId] = existing;
+                  writeSyncStore(store);
+
+                  // Sync memory store
+                  const globalStore = (global as any).__localSyncStore || new Map();
+                  globalStore.set(workspaceId, existing);
+                  (global as any).__localSyncStore = globalStore;
+                  
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({
+                    success: true,
+                    workspaceId,
+                    dbData: backupEntry.dbData,
+                    updatedAt: existing.updatedAt
+                  }));
+                } catch (err: any) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: err?.message || String(err) }));
+                }
+              });
+              return;
+            }
+
+            // Local Mock for /api/workspace and /api/workspace/link
+            if (req.url?.startsWith('/api/workspace')) {
+              const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+              
+              if (req.method === 'GET') {
+                const workspaceId = urlObj.searchParams.get('workspaceId');
+                const recoveryKey = urlObj.searchParams.get('recoveryKey');
+                
+                if (!workspaceId || !recoveryKey) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: 'Missing workspaceId or recoveryKey' }));
+                  return;
+                }
+                
+                const store = readSyncStore();
+                const cached = store.workspaces[workspaceId];
+                if (!cached) {
+                  res.statusCode = 404;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ exists: false, error: 'Workspace not found' }));
+                  return;
+                }
+                
+                if (cached.recoveryKey !== recoveryKey) {
+                  res.statusCode = 403;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ exists: true, authenticated: false, error: 'Invalid recovery key' }));
+                  return;
+                }
+                
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({
+                  success: true,
+                  exists: true,
+                  authenticated: true,
+                  workspaceId,
+                  updatedAt: cached.updatedAt
+                }));
+                return;
+              }
+              
+              if (req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => {
+                  body += chunk;
+                });
+                req.on('end', () => {
+                  try {
+                    const parsed = JSON.parse(body);
+                    const { workspaceId, recoveryKey } = parsed;
+                    
+                    if (!workspaceId || !recoveryKey) {
+                      res.statusCode = 400;
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify({ error: 'Missing workspaceId or recoveryKey' }));
+                      return;
+                    }
+                    
+                    const store = readSyncStore();
+                    const cached = store.workspaces[workspaceId];
+                    if (!cached) {
+                      res.statusCode = 404;
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify({ error: 'Workspace not found', code: 'NOT_FOUND' }));
+                      return;
+                    }
+                    
+                    if (cached.recoveryKey !== recoveryKey) {
+                      res.statusCode = 403;
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify({ error: 'Invalid recovery key', code: 'UNAUTHORIZED' }));
+                      return;
+                    }
+                    
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({
+                      success: true,
+                      workspaceId,
+                      updatedAt: cached.updatedAt,
+                      message: 'Workspace authenticated and linked'
                     }));
                   } catch (err: any) {
                     res.statusCode = 500;

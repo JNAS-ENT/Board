@@ -32,11 +32,47 @@ class SyncManager {
       window.addEventListener('offline', () => {
         this.updateStatus('offline');
       });
+
+      // Periodic background retry loop (every 15 seconds) to catch unsynced changes or offline recoveries
+      setInterval(() => {
+        const needsSync = localStorage.getItem('jnas_needs_sync') === 'true';
+        if (needsSync && navigator.onLine && this.status !== 'syncing') {
+          console.log('[Background Retry] Detected outstanding local changes. Initiating sync...');
+          this.syncNow().catch(err => console.error('[Background Retry] Sync failed:', err));
+        }
+      }, 15000);
     }
   }
 
   private init() {
     if (typeof window === 'undefined') return;
+
+    // Check for workspace deep-linking in URL on startup
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlWorkspaceId = urlParams.get('workspaceId');
+    const urlRecoveryKey = urlParams.get('recoveryKey');
+
+    if (urlWorkspaceId && urlRecoveryKey) {
+      console.log('Detected deep-linked workspace in URL. Connecting...');
+      // Strip URL parameters immediately for security and to keep address bar clean
+      const newUrl = window.location.origin + window.location.pathname;
+      window.history.replaceState({}, document.title, newUrl);
+
+      // Run connection flow asynchronously
+      setTimeout(() => {
+        this.connectToWorkspace(urlWorkspaceId, urlRecoveryKey)
+          .then((success) => {
+            if (success) {
+              console.log('Successfully connected to deep-linked workspace! Reloading components...');
+              window.location.reload();
+            }
+          })
+          .catch(err => {
+            console.error('Failed to auto-connect to deep-linked workspace:', err);
+          });
+      }, 500);
+      return;
+    }
 
     // Load or generate Workspace Credentials
     let storedId = localStorage.getItem('jnas_workspace_id');
@@ -122,6 +158,7 @@ class SyncManager {
   markAsModified() {
     this.lastModifiedAt = new Date().toISOString();
     localStorage.setItem('jnas_last_modified_at', this.lastModifiedAt);
+    localStorage.setItem('jnas_needs_sync', 'true'); // Queue this change for uploading
     this.notify();
     this.triggerAutoSync();
   }
@@ -187,6 +224,7 @@ class SyncManager {
       } else {
         // Everything is perfectly in sync
         console.log('Workspace is fully in sync with server.');
+        localStorage.setItem('jnas_needs_sync', 'false'); // Mark sync complete
         this.updateStatus('idle');
       }
     } catch (err: any) {
@@ -271,6 +309,7 @@ class SyncManager {
 
     this.lastSyncedAt = now;
     localStorage.setItem('jnas_last_synced_at', now);
+    localStorage.setItem('jnas_needs_sync', 'false'); // Mark sync complete
     this.updateStatus('idle');
   }
 
@@ -353,6 +392,7 @@ class SyncManager {
       this.lastModifiedAt = now;
       localStorage.setItem('jnas_last_synced_at', now);
       localStorage.setItem('jnas_last_modified_at', now);
+      localStorage.setItem('jnas_needs_sync', 'false'); // Mark sync complete
       this.updateStatus('idle');
     } catch (err) {
       console.error('Merge failure:', err);
@@ -362,6 +402,7 @@ class SyncManager {
       this.lastModifiedAt = remoteUpdatedAt;
       localStorage.setItem('jnas_last_synced_at', remoteUpdatedAt);
       localStorage.setItem('jnas_last_modified_at', remoteUpdatedAt);
+      localStorage.setItem('jnas_needs_sync', 'false'); // Mark sync complete
       this.updateStatus('idle');
     }
   }

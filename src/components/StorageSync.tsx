@@ -607,6 +607,48 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     }
   };
 
+  // Copy shareable deep-link with credentials
+  const handleCopyShareLink = () => {
+    try {
+      const { workspaceId, recoveryKey } = syncManager.getCredentials();
+      const shareUrl = `${window.location.origin}${window.location.pathname}?workspaceId=${workspaceId}&recoveryKey=${recoveryKey}`;
+      
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(shareUrl)
+          .then(() => {
+            showSuccess('Shareable workspace link copied to clipboard!');
+            logSecurityEvent('Shareable Workspace Link Copied');
+            setAuditLogs(getSecurityAuditLogs());
+          })
+          .catch(() => fallbackCopy(shareUrl));
+      } else {
+        fallbackCopy(shareUrl);
+      }
+    } catch (err: any) {
+      showError('Failed to generate share link.');
+    }
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand('copy');
+      textArea.remove();
+      showSuccess('Shareable workspace link copied to clipboard!');
+      logSecurityEvent('Shareable Workspace Link Copied (Fallback)');
+      setAuditLogs(getSecurityAuditLogs());
+    } catch (err) {
+      showError(`Clipboard access restricted. Workspace link: ${text}`);
+    }
+  };
+
   // Connection to existing workspace
   const handleLinkWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1045,6 +1087,14 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
             <div className="flex flex-wrap gap-2">
               {isUnlocked && (
                 <>
+                  <button
+                    onClick={handleCopyShareLink}
+                    className="px-3 py-2 bg-slate-950 hover:bg-slate-850 text-white rounded-xl text-xs font-semibold cursor-pointer border border-slate-800 hover:border-slate-700 transition flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Link2 className="w-3.5 h-3.5 text-emerald-400" />
+                    Copy Share Link
+                  </button>
+
                   <button
                     onClick={handleGenerateQrCode}
                     className="px-3 py-2 bg-slate-950 hover:bg-slate-850 text-white rounded-xl text-xs font-semibold cursor-pointer border border-slate-800 hover:border-slate-700 transition flex items-center gap-1.5 shadow-sm"

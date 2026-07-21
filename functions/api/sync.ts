@@ -22,7 +22,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     if (context.env.WORKSPACE_KV) {
       workspaceDataStr = await context.env.WORKSPACE_KV.get(workspaceId);
     } else {
-      const cached = memoryStore.get(workspaceId);
+      const globalStore = (global as any).__localSyncStore || memoryStore;
+      const cached = globalStore.get ? globalStore.get(workspaceId) : globalStore[workspaceId];
       if (cached) {
         workspaceDataStr = JSON.stringify(cached);
       }
@@ -88,7 +89,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     if (context.env.WORKSPACE_KV) {
       existingStr = await context.env.WORKSPACE_KV.get(workspaceId);
     } else {
-      const cached = memoryStore.get(workspaceId);
+      const globalStore = (global as any).__localSyncStore || memoryStore;
+      const cached = globalStore.get ? globalStore.get(workspaceId) : globalStore[workspaceId];
       if (cached) {
         existingStr = JSON.stringify(cached);
       }
@@ -132,7 +134,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       // Store indefinitely or with a generous TTL (e.g., 6 months of inactivity)
       await context.env.WORKSPACE_KV.put(workspaceId, JSON.stringify(valueToStore));
     } else {
-      memoryStore.set(workspaceId, valueToStore);
+      const globalStore = (global as any).__localSyncStore || memoryStore;
+      if (globalStore.set) {
+        globalStore.set(workspaceId, valueToStore);
+      } else {
+        globalStore[workspaceId] = valueToStore;
+      }
     }
 
     return new Response(
