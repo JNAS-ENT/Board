@@ -171,21 +171,21 @@ class SyncManager {
       clearTimeout(this.autoSyncTimeout);
     }
 
-    const delay = immediate ? 0 : 5000; // 5 seconds debounce
+    const delay = immediate ? 0 : 3000; // 3 seconds debounce for rapid auto-saving
     this.autoSyncTimeout = setTimeout(() => {
       this.syncNow().catch(err => console.error('Background auto-sync failed:', err));
     }, delay);
   }
 
   // Explicit cloud-to-local and local-to-cloud sync run
-  async syncNow(): Promise<void> {
+  async syncNow(force = false): Promise<void> {
     if (typeof window === 'undefined') return;
     if (!navigator.onLine) {
       this.updateStatus('offline');
       return;
     }
 
-    if (this.status === 'syncing') return;
+    if (this.status === 'syncing' && !force) return;
 
     this.updateStatus('syncing');
 
@@ -211,13 +211,13 @@ class SyncManager {
       const remoteModifiedTime = new Date(remote.updatedAt).getTime();
       const lastSyncedTime = this.lastSyncedAt ? new Date(this.lastSyncedAt).getTime() : 0;
 
-      if (remoteModifiedTime > lastSyncedTime && remoteModifiedTime > localModifiedTime) {
-        // Remote is newer! Run smart merge & pull down remote database
-        console.log('Remote is newer. Merging changes from server...');
+      // Critical Correction: If we have never synced (this.lastSyncedAt is null) but there is remote data on the server,
+      // we must pull and merge the remote database to avoid overwriting it with our empty local IndexedDB.
+      if (force || remoteModifiedTime > localModifiedTime || !this.lastSyncedAt) {
+        console.log('Remote is newer, force requested, or first sync. Pulling and merging...');
         await this.pullAndMergeRemote(remote.dbData, remote.updatedAt);
-      } else if (localModifiedTime > lastSyncedTime || !this.lastSyncedAt) {
-        // Local is newer! Push local data to server
-        console.log('Local is newer or un-synced. Pushing to server...');
+      } else if (localModifiedTime > remoteModifiedTime) {
+        console.log('Local is newer. Pushing to server...');
         await this.pushLocalToServer();
       } else {
         // Everything is perfectly in sync

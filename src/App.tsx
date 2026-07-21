@@ -128,7 +128,7 @@ export default function App() {
   // Global manual save button handler
   const handleManualSave = async () => {
     try {
-      await syncManager.syncNow();
+      await syncManager.syncNow(true); // force-sync on manual trigger
     } catch (err) {
       console.error("Manual save sync failed:", err);
     }
@@ -363,22 +363,22 @@ export default function App() {
                 {syncState.status === 'syncing' ? (
                   <>
                     <RefreshCw className="w-3 h-3 animate-spin text-blue-500" />
-                    <span>Saving...</span>
+                    <span>Syncing...</span>
                   </>
                 ) : syncState.status === 'error' ? (
                   <>
                     <AlertTriangle className="w-3 h-3 text-rose-500" />
-                    <span>Save Failed</span>
+                    <span>Force Sync ↻</span>
                   </>
                 ) : syncState.status === 'offline' ? (
                   <>
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
-                    <span>Saved Local</span>
+                    <span>Force Sync ↻</span>
                   </>
                 ) : (
                   <>
                     <CheckCircle className="w-3 h-3 text-emerald-500" />
-                    <span>Saved ✓</span>
+                    <span>Force Sync ↻</span>
                   </>
                 )}
               </button>

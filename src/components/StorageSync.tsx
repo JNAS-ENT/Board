@@ -73,26 +73,24 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
   const [copiedId, setCopiedId] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
 
-  // Master Password States
-  const [isPasswordRegistered, setIsPasswordRegistered] = useState<boolean>(false);
-  const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
+  // Open-by-default access (No logins needed)
+  const [isPasswordRegistered, setIsPasswordRegistered] = useState<boolean>(true);
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(true);
   
-  // Registration Form
+  // Form placeholders (stubbed out to avoid compile errors)
   const [regPassword, setRegPassword] = useState('');
   const [regConfirm, setRegConfirm] = useState('');
-  
-  // Unlock Form
   const [unlockPassword, setUnlockPassword] = useState('');
   const [showUnlockModal, setShowUnlockModal] = useState(false);
 
-  // Decrypted Credentials (cleared from memory on lock)
+  // Open credentials loaded directly on state change
   const [unlockedId, setUnlockedId] = useState('');
   const [unlockedKey, setUnlockedKey] = useState('');
   
   // Reveal toggles
   const [showCredentialsRaw, setShowCredentialsRaw] = useState(false);
   
-  // Auto-hide countdown
+  // Hide countdown (no countdown needed since it's open)
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<any>(null);
 
@@ -111,7 +109,7 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
 
-  // Password Verification for Destructive Tasks
+  // JNAS 'jnas' confirmation challenge for destructive actions
   const [confirmPasswordAction, setConfirmPasswordAction] = useState<(() => void) | null>(null);
   const [destructivePasswordInput, setDestructivePasswordInput] = useState('');
   const [showDestructiveUnlock, setShowDestructiveUnlock] = useState(false);
@@ -138,16 +136,19 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     }
   };
 
-  // Refresh and check password status
+  // Populate active workspace credentials directly
+  useEffect(() => {
+    const creds = syncManager.getCredentials();
+    setUnlockedId(creds.workspaceId);
+    setUnlockedKey(creds.recoveryKey);
+  }, [syncState]);
+
+  // Refresh stats and subscribe to sync manager
   useEffect(() => {
     loadStats();
     setAutoBackups(syncManager.getAutoBackups());
     setAuditLogs(getSecurityAuditLogs());
 
-    const hasPassword = !!localStorage.getItem('jnas_master_password_hash');
-    setIsPasswordRegistered(hasPassword);
-
-    // Subscribe to syncManager
     const unsubscribe = syncManager.subscribe((state) => {
       setSyncState(state);
     });
@@ -155,76 +156,10 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     return () => unsubscribe();
   }, []);
 
-  // Window/Document blur & focus locks (Session Security)
-  useEffect(() => {
-    const handleLockOnBlur = () => {
-      if (isUnlocked) {
-        lockCredentials('Auto-Lock: Tab Blurred / Focus Lost');
-      }
-    };
-
-    const handleLockOnVisibilityChange = () => {
-      if (document.hidden && isUnlocked) {
-        lockCredentials('Auto-Lock: Screen Minimized / Hidden');
-      }
-    };
-
-    window.addEventListener('blur', handleLockOnBlur);
-    document.addEventListener('visibilitychange', handleLockOnVisibilityChange);
-
-    return () => {
-      window.removeEventListener('blur', handleLockOnBlur);
-      document.removeEventListener('visibilitychange', handleLockOnVisibilityChange);
-    };
-  }, [isUnlocked]);
-
-  // Lock and clean memories
+  // Stub locks to keep them open
   const lockCredentials = (reason = 'Credentials Locked') => {
-    setUnlockedId('');
-    setUnlockedKey('');
-    setIsUnlocked(false);
-    setShowCredentialsRaw(false);
-    setQrCodeDataUrl('');
-    setShowQrModal(false);
-    setCountdown(null);
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-    }
-    showSuccess(reason);
-    logSecurityEvent(reason);
+    // No-op to remain open-by-default
   };
-
-  // Handle countdown for Auto Hide
-  useEffect(() => {
-    if (isUnlocked) {
-      setCountdown(45); // 45 seconds countdown
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-      }
-      countdownTimerRef.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev === null) return null;
-          if (prev <= 1) {
-            clearInterval(countdownTimerRef.current);
-            lockCredentials('Auto-Lock: Idle Timeout (45s)');
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      setCountdown(null);
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-      }
-    }
-
-    return () => {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-      }
-    };
-  }, [isUnlocked]);
 
   const showSuccess = (msg: string) => {
     setMessage(msg);
@@ -237,10 +172,6 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
   };
 
   const handleCopy = (text: string, type: 'id' | 'key') => {
-    if (!isUnlocked) {
-      showError('Please unlock with Master Password to copy.');
-      return;
-    }
     navigator.clipboard.writeText(text);
     if (type === 'id') {
       setCopiedId(true);
@@ -253,65 +184,17 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     logSecurityEvent(`Credential Copied: ${type === 'id' ? 'Workspace ID' : 'Recovery Key'}`);
   };
 
-  // Setup Master Password
+  // Setup Master Password (no-op stub)
   const handleRegisterPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (regPassword.length < 6) {
-      showError('Master Password must be at least 6 characters.');
-      return;
-    }
-    if (regPassword !== regConfirm) {
-      showError('Passwords do not match.');
-      return;
-    }
-
-    try {
-      const hashed = await hashPassword(regPassword);
-      localStorage.setItem('jnas_master_password_hash', hashed);
-      setIsPasswordRegistered(true);
-      setRegPassword('');
-      setRegConfirm('');
-      showSuccess('JNAS Master Password successfully initialized!');
-      await logSecurityEvent('Master Password Initialized');
-      setAuditLogs(getSecurityAuditLogs());
-    } catch (err) {
-      showError('Failed to initialize password.');
-    }
   };
 
-  // Unlock credentials
+  // Unlock credentials (no-op stub)
   const handleUnlockCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const storedHash = localStorage.getItem('jnas_master_password_hash');
-      if (!storedHash) {
-        showError('No Master Password configured.');
-        return;
-      }
-
-      const inputHash = await hashPassword(unlockPassword);
-      if (inputHash === storedHash) {
-        // Correct Password
-        const creds = syncManager.getCredentials();
-        setUnlockedId(creds.workspaceId);
-        setUnlockedKey(creds.recoveryKey);
-        setIsUnlocked(true);
-        setUnlockPassword('');
-        setShowUnlockModal(false);
-        showSuccess('Credentials unlocked successfully. Active for 45s.');
-        await logSecurityEvent('Credential Viewed');
-        setAuditLogs(getSecurityAuditLogs());
-      } else {
-        showError('Incorrect Master Password');
-        await logSecurityEvent('Failed Unlock Attempt');
-        setAuditLogs(getSecurityAuditLogs());
-      }
-    } catch (err) {
-      showError('Verification failed.');
-    }
   };
 
-  // Force Master Password verification for high-risk operations
+  // JNAS confirmation keyword challenge ('jnas')
   const triggerPasswordChallenge = (action: () => void) => {
     setConfirmPasswordAction(() => action);
     setDestructivePasswordInput('');
@@ -320,23 +203,16 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
 
   const handleConfirmDestructiveAction = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const storedHash = localStorage.getItem('jnas_master_password_hash');
-      const inputHash = await hashPassword(destructivePasswordInput);
-      
-      if (inputHash === storedHash) {
-        setShowDestructiveUnlock(false);
-        setDestructivePasswordInput('');
-        if (confirmPasswordAction) {
-          confirmPasswordAction();
-        }
-      } else {
-        showError('Incorrect Master Password. Action aborted.');
-        setShowDestructiveUnlock(false);
-        setDestructivePasswordInput('');
+    if (destructivePasswordInput.trim().toLowerCase() === 'jnas') {
+      setShowDestructiveUnlock(false);
+      setDestructivePasswordInput('');
+      if (confirmPasswordAction) {
+        confirmPasswordAction();
       }
-    } catch (err) {
-      showError('Verification failed.');
+    } else {
+      showError("Incorrect confirmation code. Please type 'jnas' to authorize.");
+      setShowDestructiveUnlock(false);
+      setDestructivePasswordInput('');
     }
   };
 
@@ -345,9 +221,7 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     triggerPasswordChallenge(async () => {
       try {
         const newKey = syncManager.regenerateRecoveryKey();
-        if (isUnlocked) {
-          setUnlockedKey(newKey);
-        }
+        setUnlockedKey(newKey);
         showSuccess('Recovery key regenerated and updated!');
         await logSecurityEvent('Recovery Key Regenerated');
         setAuditLogs(getSecurityAuditLogs());
@@ -359,10 +233,6 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
 
   // Generate connection QR Code (Combined JSON)
   const handleGenerateQrCode = async () => {
-    if (!isUnlocked) {
-      showError('Please unlock with Master Password to generate QR.');
-      return;
-    }
     try {
       const data = JSON.stringify({
         workspaceId: unlockedId,
@@ -861,80 +731,6 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     }
   };
 
-  // If Master Password is not registered, force setup first
-  if (!isPasswordRegistered) {
-    return (
-      <div className="max-w-xl mx-auto py-12 px-4 text-left">
-        <div className={`p-8 rounded-3xl border shadow-xl space-y-6 ${
-          darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
-        }`}>
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-indigo-600/10 rounded-2xl text-indigo-500">
-              <Shield className="w-8 h-8" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">Set Up JNAS Master Password</h1>
-              <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                Configure local-only cryptographic authorization.
-              </p>
-            </div>
-          </div>
-
-          <div className={`p-4 rounded-2xl border text-xs leading-relaxed space-y-2 ${
-            darkMode ? 'bg-slate-950/50 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-250 text-slate-500'
-          }`}>
-            <p className="font-semibold text-slate-300">Why do I need a Master Password?</p>
-            <p>
-              Your Workspace ID and Recovery Key synchronize your encrypted diaries, kanban cards, and code snippets to the secure server.
-            </p>
-            <p>
-              To prevent unauthorized physical access on this machine, sensitive credentials and backups are locked. This password is hashed and checked strictly on your device.
-            </p>
-          </div>
-
-          <form onSubmit={handleRegisterPassword} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono tracking-wider opacity-60">JNAS Master Password</label>
-              <input
-                type="password"
-                placeholder="Minimum 6 characters"
-                value={regPassword}
-                onChange={e => setRegPassword(e.target.value)}
-                autoComplete="new-password"
-                className={`w-full px-4 py-3 rounded-2xl text-sm border ${
-                  darkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-slate-50 border-slate-250 text-slate-800 focus:border-blue-500'
-                } outline-none transition`}
-                required
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono tracking-wider opacity-60">Confirm Password</label>
-              <input
-                type="password"
-                placeholder="Re-enter password"
-                value={regConfirm}
-                onChange={e => setRegConfirm(e.target.value)}
-                autoComplete="new-password"
-                className={`w-full px-4 py-3 rounded-2xl text-sm border ${
-                  darkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-slate-50 border-slate-250 text-slate-800 focus:border-blue-500'
-                } outline-none transition`}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-sm transition shadow-lg cursor-pointer"
-            >
-              Initialize Master Password
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 max-w-5xl mx-auto px-1">
       
@@ -946,10 +742,10 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Shield className="w-5 h-5 text-indigo-400" />
-              <h1 className="text-2xl font-bold tracking-tight">Secure Storage & Sync</h1>
+              <h1 className="text-2xl font-bold tracking-tight">Storage & Synchronization Console</h1>
             </div>
             <p className={`text-sm ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              Production-grade zero-login synchronization console locked by JNAS Master Password.
+              Production-grade zero-login synchronization console. All backup snapshot and factory reset actions are secured via 'jnas' validation.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -957,12 +753,6 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
               <span className="w-2 h-2 rounded-full bg-current"></span>
               <span>{syncState.status}</span>
             </div>
-            {isUnlocked && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[11px] font-mono font-bold">
-                <Clock className="w-3.5 h-3.5 animate-pulse" />
-                <span>UNLOCKED ({countdown}s)</span>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -994,26 +784,13 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
                 <Cloud className="w-4 h-4 text-blue-500" />
                 Active Workspace Cloud Binding
               </h2>
-              {!isUnlocked ? (
-                <button
-                  onClick={() => setShowUnlockModal(true)}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[11px] font-bold cursor-pointer transition flex items-center gap-1.5 shadow-md"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  View Storage Credentials
-                </button>
-              ) : (
-                <button
-                  onClick={() => lockCredentials('Credentials Locked Manually')}
-                  className="px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-[11px] font-bold cursor-pointer border border-slate-850 transition flex items-center gap-1.5"
-                >
-                  <Unlock className="w-3.5 h-3.5 text-amber-500" />
-                  Lock Credentials
-                </button>
-              )}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/15 text-[10px] font-mono font-bold uppercase tracking-wider">
+                <Unlock className="w-3.5 h-3.5" />
+                Open Access Active
+              </div>
             </div>
             <p className={`text-xs mb-6 leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              Your devices sync automatically in the background using these credentials. Keep them private. Unlock to copy, export, or generate connection QR codes.
+              Your devices sync automatically in the background using these credentials. Keep them private. You can copy, export, or generate connection QR codes directly.
             </p>
 
             <div className="space-y-4">
@@ -1539,7 +1316,7 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
         </div>
       )}
 
-      {/* 2. Modal: Destructive Action Password Challenge */}
+      {/* 2. Modal: Destructive Action Confirmation Challenge */}
       {showDestructiveUnlock && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className={`w-full max-w-md p-6 rounded-3xl border border-rose-500/30 shadow-2xl space-y-4 text-left ${
@@ -1547,21 +1324,21 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
           }`}>
             <div className="flex items-center gap-2 text-rose-500">
               <Lock className="w-5 h-5 shrink-0 animate-pulse" />
-              <h3 className="text-sm font-bold uppercase tracking-wider font-mono">Security Challenge Required</h3>
+              <h3 className="text-sm font-bold uppercase tracking-wider font-mono">Authorization Challenge Required</h3>
             </div>
             
             <p className="text-xs text-slate-400 leading-relaxed">
-              You are executing a high-risk operation. Enter your JNAS Master Password to authorize.
+              You are executing a high-risk operation. To prevent accidental data loss, please type <strong className="text-rose-400 font-mono">jnas</strong> in the field below to authorize.
             </p>
 
             <form onSubmit={handleConfirmDestructiveAction} className="space-y-4">
               <input
-                type="password"
-                placeholder="Enter JNAS Master Password"
+                type="text"
+                placeholder="Type 'jnas' here"
                 value={destructivePasswordInput}
                 onChange={e => setDestructivePasswordInput(e.target.value)}
                 autoFocus
-                className="w-full px-3 py-2.5 rounded-xl text-xs border bg-slate-950 border-rose-500/20 text-white focus:border-rose-500 outline-none transition font-mono"
+                className="w-full px-3 py-2.5 rounded-xl text-xs border bg-slate-950 border-rose-500/20 text-white focus:border-rose-500 outline-none transition font-mono text-center tracking-widest font-bold"
                 required
               />
 
