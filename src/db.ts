@@ -13,6 +13,7 @@ const DB_VERSION = 1;
 
 class WorkspaceDB {
   private db: IDBDatabase | null = null;
+  public onModified: (() => void) | null = null;
 
   init(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -84,7 +85,10 @@ class WorkspaceDB {
       try {
         const store = this.getStore(storeName, 'readwrite');
         const request = store.put(item);
-        request.onsuccess = () => resolve();
+        request.onsuccess = () => {
+          if (this.onModified) this.onModified();
+          resolve();
+        };
         request.onerror = () => reject(request.error);
       } catch (err) {
         reject(err);
@@ -98,7 +102,10 @@ class WorkspaceDB {
       try {
         const store = this.getStore(storeName, 'readwrite');
         const request = store.delete(id);
-        request.onsuccess = () => resolve();
+        request.onsuccess = () => {
+          if (this.onModified) this.onModified();
+          resolve();
+        };
         request.onerror = () => reject(request.error);
       } catch (err) {
         reject(err);
@@ -205,7 +212,10 @@ class WorkspaceDB {
         store.put(elem);
       });
 
-      transaction.oncomplete = () => resolve();
+      transaction.oncomplete = () => {
+        if (this.onModified) this.onModified();
+        resolve();
+      };
       transaction.onerror = () => reject(transaction.error);
     });
   }
@@ -220,7 +230,10 @@ class WorkspaceDB {
       const transaction = this.db.transaction('whiteboard', 'readwrite');
       const store = transaction.objectStore('whiteboard');
       const request = store.clear();
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        if (this.onModified) this.onModified();
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   }
@@ -310,7 +323,10 @@ class WorkspaceDB {
       const transaction = this.db.transaction('activities', 'readwrite');
       const store = transaction.objectStore('activities');
       const request = store.clear();
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        if (this.onModified) this.onModified();
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   }

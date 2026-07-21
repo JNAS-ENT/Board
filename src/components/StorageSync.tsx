@@ -6,16 +6,21 @@ import {
   Trash2, 
   Cloud, 
   RefreshCw, 
-  CheckCircle, 
+  CheckCircle2, 
   AlertTriangle,
   FileText,
   FileDown,
-  Chrome,
-  ArrowRight,
-  Info,
-  Loader2
+  Copy,
+  Check,
+  Link2,
+  ShieldAlert,
+  Clock,
+  RotateCcw,
+  PlusCircle,
+  HelpCircle
 } from 'lucide-react';
 import { db } from '../db';
+import { syncManager, SyncState } from '../syncManager';
 
 interface StorageSyncProps {
   darkMode: boolean;
@@ -32,11 +37,21 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     activities: 0
   });
 
+  const [syncState, setSyncState] = useState<SyncState>(syncManager.getState());
   const [message, setMessage] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [isDriveSyncing, setIsDriveSyncing] = useState(false);
-  const [driveConnected, setDriveConnected] = useState(false);
-  const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
+  
+  // Link credentials form
+  const [linkWorkspaceId, setLinkWorkspaceId] = useState('');
+  const [linkRecoveryKey, setLinkRecoveryKey] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
+
+  // Auto-backup states
+  const [autoBackups, setAutoBackups] = useState<Array<{ key: string; timestamp: string; label: string }>>([]);
+
+  // Copy-to-clipboard state helpers
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
 
   const loadStats = async () => {
     try {
@@ -62,19 +77,107 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
 
   useEffect(() => {
     loadStats();
+    setAutoBackups(syncManager.getAutoBackups());
+
+    // Subscribe to syncManager states
+    const unsubscribe = syncManager.subscribe((state) => {
+      setSyncState(state);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const showSuccess = (msg: string) => {
     setMessage(msg);
-    setTimeout(() => setMessage(''), 4000);
+    setTimeout(() => setMessage(''), 4500);
   };
 
   const showError = (msg: string) => {
     setErrorMsg(msg);
-    setTimeout(() => setErrorMsg(''), 4000);
+    setTimeout(() => setErrorMsg(''), 4500);
   };
 
-  // 1. DATABASE EXPORT
+  const handleCopy = (text: string, type: 'id' | 'key') => {
+    navigator.clipboard.writeText(text);
+    if (type === 'id') {
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    } else {
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), 2000);
+    }
+    showSuccess('Copied to clipboard!');
+  };
+
+  // Manual cloud synchronization
+  const handleManualSync = async () => {
+    try {
+      await syncManager.syncNow();
+      showSuccess('Cloud synchronization completed successfully!');
+      loadStats();
+      triggerRefresh();
+    } catch (err: any) {
+      showError(err?.message || 'Sync failed. Working in local offline mode.');
+    }
+  };
+
+  // Connection to existing workspace
+  const handleLinkWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!linkWorkspaceId.trim() || !linkRecoveryKey.trim()) {
+      showError('Please supply both the Workspace ID and the Recovery Key.');
+      return;
+    }
+
+    const confirmLink = window.confirm(
+      "WARNING: Connecting to this workspace will replace all your current local browser data with the cloud data from that workspace. Proceed?"
+    );
+    if (!confirmLink) return;
+
+    setIsLinking(true);
+    try {
+      await syncManager.connectToWorkspace(linkWorkspaceId.trim(), linkRecoveryKey.trim());
+      showSuccess('Successfully linked workspace! All data downloaded from cloud.');
+      setLinkWorkspaceId('');
+      setLinkRecoveryKey('');
+      loadStats();
+      triggerRefresh();
+    } catch (err: any) {
+      showError(err?.message || 'Failed to connect. Double check your keys.');
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
+  // Manual Recovery Snapshot creation
+  const handleCreateManualBackup = async () => {
+    try {
+      await syncManager.createAutoBackup('manual');
+      setAutoBackups(syncManager.getAutoBackups());
+      showSuccess('Self-healing recovery point snapshot recorded in browser local storage!');
+    } catch (err) {
+      showError('Failed to capture backup snapshot.');
+    }
+  };
+
+  // Restore rolling backup
+  const handleRestoreBackup = async (key: string) => {
+    const confirmRestore = window.confirm(
+      "Are you sure you want to restore this snapshot? Your current local state will be overwritten (but synchronized to the cloud if newer)."
+    );
+    if (!confirmRestore) return;
+
+    try {
+      await syncManager.restoreAutoBackup(key);
+      showSuccess('Local database successfully rolled back to selected recovery point!');
+      loadStats();
+      triggerRefresh();
+    } catch (err) {
+      showError('Failed to restore snapshot.');
+    }
+  };
+
+  // JSON Database file export
   const handleExportDB = async () => {
     try {
       const jsonStr = await db.exportDB();
@@ -85,14 +188,14 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
       a.download = `jnas_workspace_backup_${new Date().toISOString().split('T')[0]}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      showSuccess('IndexedDB database JSON backup downloaded successfully!');
+      showSuccess('Database snapshot exported and downloaded as JSON.');
     } catch (err) {
       console.error(err);
       showError('Export failed.');
     }
   };
 
-  // 2. DATABASE IMPORT
+  // JSON Database file restore
   const handleImportDB = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -101,32 +204,30 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     reader.onload = async (event) => {
       try {
         const jsonStr = event.target?.result as string;
-        
-        // Basic validation
         const parsed = JSON.parse(jsonStr);
         if (!parsed.diary && !parsed.kanban_cards && !parsed.whiteboard) {
-          throw new Error('Invalid backup schema');
+          throw new Error('Invalid file format.');
         }
 
         const confirmRestore = window.confirm(
-          "WARNING: Restoring a backup will overwrite your current local database state. Proceed?"
+          "WARNING: Overwriting database with imported JSON file. This replaces your current local state. Proceed?"
         );
         if (!confirmRestore) return;
 
         await db.importDB(jsonStr);
         loadStats();
         triggerRefresh();
-        showSuccess('Workspace database successfully restored from JSON backup!');
+        showSuccess('Workspace database successfully restored from imported JSON backup!');
       } catch (err) {
         console.error(err);
-        showError('Invalid backup file. Ensure it is a valid Workspace JSON clone.');
+        showError('Invalid JSON file. Please ensure it is a valid JNAS Workspace backup.');
       }
     };
     reader.readAsText(file);
-    e.target.value = ''; // Reset input
+    e.target.value = ''; // Reset
   };
 
-  // 3. DIARY COMPILATION EXPORT (Markdown file)
+  // Diary Markdown compiled export
   const handleExportMarkdown = async () => {
     try {
       const diaries = await db.getDiaryEntries();
@@ -137,7 +238,6 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
 
       let markdownCompiled = `# JNAS ARCHITECT WORKSPACE — DIARY LOG EXPORT\nGenerated: ${new Date().toLocaleString()}\n\n`;
 
-      // Compile newest diaries first
       diaries.forEach(entry => {
         markdownCompiled += `=========================================\n`;
         markdownCompiled += `## ${entry.title || 'Untitled log'}\n`;
@@ -159,15 +259,14 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
     }
   };
 
-  // 4. DESTRUCTIVE DB ERASE
+  // Local state wipe
   const handleClearDB = async () => {
     const doubleConfirm = window.confirm(
-      "DANGER: This action is irreversible. It will wipe all local diary logs, kanban workflows, whiteboard canvases, codebases, and bookmarks. Do you want to proceed?"
+      "DANGER: Wiping all local data is permanent. You will lose your diaries, boards, whiteboard drawings, code snippets, and resources. Proceed?"
     );
     if (!doubleConfirm) return;
 
     try {
-      // Clear stores
       const overwriteStore = async (storeName: string) => {
         return new Promise<void>((resolve, reject) => {
           if (!db['db']) return reject(new Error('DB not loaded'));
@@ -191,267 +290,342 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
       showSuccess('All database stores successfully cleared.');
     } catch (err) {
       console.error(err);
-      showError('Reset failed.');
+      showError('Factory reset failed.');
     }
   };
 
-  // 5. GOOGLE DRIVE SYNC (Mock client authorization & Sync logic)
-  const handleConnectGoogleDrive = () => {
-    // Client-side simulation of OAuth and synchronization.
-    // This connects seamlessly and creates backups on Drive.
-    setIsDriveSyncing(true);
-    setTimeout(() => {
-      setDriveConnected(true);
-      setDriveFolderId('drive-backups-jnas-xyz');
-      setIsDriveSyncing(false);
-      showSuccess('Google Drive connected! Sync target folder: "JNAS_Workspace_Backups"');
-    }, 1200);
-  };
-
-  const handleSyncDriveNow = async () => {
-    if (!driveConnected) return;
-
-    setIsDriveSyncing(true);
-    try {
-      const dbClone = await db.exportDB();
-      // Simulation of uploading file chunk with Fetch API to Drive:
-      // In actual deployment with valid credentials, we trigger drive v3 REST API.
-      setTimeout(() => {
-        setIsDriveSyncing(false);
-        showSuccess('Synchronized! Uploaded workspace_sync.json to Google Drive folder.');
-      }, 1500);
-    } catch (err) {
-      console.error(err);
-      setIsDriveSyncing(false);
-      showError('Google Drive sync connection lost.');
+  // Color matching status indicators
+  const getStatusColor = () => {
+    switch (syncState.status) {
+      case 'idle': return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+      case 'syncing': return 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse';
+      case 'offline': return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+      case 'error': return 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+      default: return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
     }
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto px-1">
+    <div className="space-y-6 max-w-5xl mx-auto px-1">
       
-      {/* Header */}
+      {/* Top Header Card */}
       <div className={`p-6 rounded-2xl border text-left ${
         darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
       }`}>
-        <h1 className="text-2xl font-bold tracking-tight">Storage & Sync Manager</h1>
-        <p className={`text-sm mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-          Local-first diagnostics, hypermedia exports, and Google Drive cloud folder synchronizer.
-        </p>
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight">Zero-Login Storage & Sync</h1>
+            <p className={`text-sm ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              Production-ready distributed synchronization system and local-first self-healing database.
+            </p>
+          </div>
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-mono font-bold uppercase tracking-wider ${getStatusColor()}`}>
+            <span className="w-2 h-2 rounded-full bg-current"></span>
+            <span>{syncState.status}</span>
+          </div>
+        </div>
       </div>
 
       {message && (
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs flex items-center gap-2 font-sans animate-fade-in">
-          <CheckCircle className="w-4 h-4 text-emerald-500" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
           <span>{message}</span>
         </div>
       )}
 
       {errorMsg && (
         <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-400 rounded-xl text-xs flex items-center gap-2 font-sans animate-fade-in">
-          <AlertTriangle className="w-4 h-4 text-rose-500" />
+          <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {/* Grid: Stats Column / Import-Export Actions Column */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Main Grid: Workspace Sync Credentials & Link Devices */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Local DB Diagnostics Panel */}
-        <div className={`p-6 rounded-2xl border ${
-          darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
-        }`}>
-          <h2 className="text-sm font-bold flex items-center gap-2 mb-1">
-            <Database className="w-4 h-4 text-blue-500" />
-            Local IndexedDB Engine Cache
-          </h2>
-          <p className={`text-[11px] mb-6 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-            Audit metrics showing structured tables cached in your browser.
-          </p>
-
-          <div className="space-y-3 text-xs font-mono">
-            <div className="flex justify-between items-center py-2 border-b border-dashed border-slate-800">
-              <span className="opacity-60">tbl_diary</span>
-              <span className="font-bold">{stats.diary} rows</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b border-dashed border-slate-800">
-              <span className="opacity-60">tbl_kanban_cards</span>
-              <span className="font-bold">{stats.kanban_cards} rows</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b border-dashed border-slate-800">
-              <span className="opacity-60">tbl_whiteboard</span>
-              <span className="font-bold">{stats.whiteboard} rows</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b border-dashed border-slate-800">
-              <span className="opacity-60">tbl_resources</span>
-              <span className="font-bold">{stats.resources} rows</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b border-dashed border-slate-800">
-              <span className="opacity-60">tbl_snippets</span>
-              <span className="font-bold">{stats.code_snippets} rows</span>
-            </div>
-            <div className="flex justify-between items-center py-2">
-              <span className="opacity-60">tbl_activities</span>
-              <span className="font-bold">{stats.activities} rows</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Local Import/Export Backup Actions */}
-        <div className={`p-6 rounded-2xl border space-y-6 ${
+        {/* Workspace Credentials Info */}
+        <div className={`lg:col-span-2 p-6 rounded-2xl border text-left flex flex-col justify-between ${
           darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
         }`}>
           <div>
-            <h2 className="text-sm font-bold flex items-center gap-2 mb-1">
-              <Download className="w-4 h-4 text-emerald-500" />
-              Offline Backup & Restore
+            <h2 className="text-sm font-bold flex items-center gap-2 mb-2">
+              <Cloud className="w-4 h-4 text-blue-500" />
+              Active Workspace Cloud Binding
             </h2>
-            <p className={`text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              Download database backups or export compiled diary logs directly into Markdown.
+            <p className={`text-xs mb-6 leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              Your devices sync automatically in the background using these unique credentials. Keep them private. No login or registration required.
             </p>
+
+            <div className="space-y-4">
+              {/* Workspace ID Block */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-mono tracking-wider opacity-60">Workspace ID (Private UUID)</label>
+                <div className={`flex items-center justify-between p-3 rounded-xl border font-mono text-xs ${
+                  darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="truncate pr-4 select-all">{syncState.workspaceId}</span>
+                  <button 
+                    onClick={() => handleCopy(syncState.workspaceId, 'id')}
+                    className={`p-1.5 rounded-lg hover:bg-slate-800 transition text-slate-400 hover:text-white cursor-pointer`}
+                    title="Copy Workspace ID"
+                  >
+                    {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Recovery Key Block */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-mono tracking-wider opacity-60">Workspace Recovery Key / Passphrase</label>
+                <div className={`flex items-center justify-between p-3 rounded-xl border font-mono text-xs ${
+                  darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="truncate pr-4 select-all text-blue-400 font-semibold">{syncState.recoveryKey}</span>
+                  <button 
+                    onClick={() => handleCopy(syncState.recoveryKey, 'key')}
+                    className={`p-1.5 rounded-lg hover:bg-slate-800 transition text-slate-400 hover:text-white cursor-pointer`}
+                    title="Copy Recovery Key"
+                  >
+                    {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="space-y-3 text-xs">
-            {/* Export JSON database */}
-            <button
-              onClick={handleExportDB}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition cursor-pointer flex justify-center items-center gap-2"
-            >
-              <Download className="w-4 h-4" />
-              Download Database Backup (.json)
-            </button>
-
-            {/* Export Diary Markdown */}
-            <button
-              onClick={handleExportMarkdown}
-              className="w-full py-2.5 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl font-medium transition cursor-pointer flex justify-center items-center gap-2"
-            >
-              <FileDown className="w-4 h-4 text-emerald-500" />
-              Compile & Download Diary (.md)
-            </button>
-
-            {/* Import JSON database */}
-            <div className="relative">
-              <input
-                type="file"
-                id="restore-db-file"
-                accept=".json"
-                onChange={handleImportDB}
-                className="hidden"
-              />
-              <label
-                htmlFor="restore-db-file"
-                className="w-full py-2.5 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl font-medium transition cursor-pointer flex justify-center items-center gap-2 border-dashed text-center"
-              >
-                <Upload className="w-4 h-4 text-purple-500" />
-                Upload Database Restore (.json)
-              </label>
+          <div className="mt-6 pt-4 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="text-[11px] font-mono opacity-50 text-left">
+              Last Synced: {syncState.lastSyncedAt ? new Date(syncState.lastSyncedAt).toLocaleString() : 'Never'}
             </div>
-
-            {/* Reset / Wipe */}
+            
             <button
-              onClick={handleClearDB}
-              className="w-full py-2 bg-rose-500/10 hover:bg-rose-500 hover:text-white text-rose-400 rounded-xl font-medium transition cursor-pointer flex justify-center items-center gap-2 border border-rose-500/10"
+              onClick={handleManualSync}
+              disabled={syncState.status === 'syncing'}
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded-xl text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-2 shadow-sm"
             >
-              <Trash2 className="w-4 h-4" />
-              Clear Local Cache / Factory Reset
+              <RefreshCw className={`w-3.5 h-3.5 ${syncState.status === 'syncing' ? 'animate-spin' : ''}`} />
+              Sync Now
             </button>
+          </div>
+        </div>
+
+        {/* Link Another Device Form */}
+        <div className={`p-6 rounded-2xl border text-left flex flex-col justify-between ${
+          darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+        }`}>
+          <div>
+            <h2 className="text-sm font-bold flex items-center gap-2 mb-2">
+              <Link2 className="w-4 h-4 text-purple-400" />
+              Link Device / Pull Cloud Data
+            </h2>
+            <p className={`text-xs mb-4 leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              Connect to an existing workspace on this browser. Input the target Workspace ID and Recovery Key to merge.
+            </p>
+
+            <form onSubmit={handleLinkWorkspace} className="space-y-3">
+              <input
+                type="text"
+                placeholder="Paste Target Workspace ID"
+                value={linkWorkspaceId}
+                onChange={(e) => setLinkWorkspaceId(e.target.value)}
+                className={`w-full px-3 py-2 rounded-xl text-xs border font-mono ${
+                  darkMode ? 'bg-slate-950 border-slate-850 text-white placeholder-slate-600 focus:border-blue-500' : 'bg-slate-50 border-slate-200 placeholder-slate-400 focus:border-blue-500'
+                } outline-none transition`}
+              />
+
+              <input
+                type="text"
+                placeholder="Paste Target Recovery Key"
+                value={linkRecoveryKey}
+                onChange={(e) => setLinkRecoveryKey(e.target.value)}
+                className={`w-full px-3 py-2 rounded-xl text-xs border font-mono ${
+                  darkMode ? 'bg-slate-950 border-slate-850 text-white placeholder-slate-600 focus:border-blue-500' : 'bg-slate-50 border-slate-200 placeholder-slate-400 focus:border-blue-500'
+                } outline-none transition`}
+              />
+
+              <button
+                type="submit"
+                disabled={isLinking}
+                className="w-full py-2 bg-slate-950 hover:bg-slate-850 text-white rounded-xl border border-slate-800 hover:border-slate-700 text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-2 shadow-sm"
+              >
+                {isLinking ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Linking...
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="w-3.5 h-3.5" />
+                    Connect & Fetch
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+
+          <div className="mt-4 text-[10px] leading-relaxed text-slate-500 italic text-left">
+            * Warning: Overwrites the local browser state.
           </div>
         </div>
 
       </div>
 
-      {/* Google Drive Synchronization (Optional) */}
-      <div className={`p-6 rounded-2xl border ${
-        darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
-      }`}>
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <div className="space-y-1">
-            <h2 className="text-sm font-bold flex items-center gap-2">
-              <Cloud className="w-4 h-4 text-blue-400" />
-              Optional Google Drive Synchronization
-            </h2>
-            <p className={`text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              Back up and synchronize your database securely in a user-selected Google Drive folder. Fully offline functional first.
-            </p>
+      {/* Grid: Self-Healing Backups & Database Diagnostics */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Self-Healing Local Recovery Point Snapshots */}
+        <div className={`p-6 rounded-2xl border text-left ${
+          darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+        }`}>
+          <div className="flex justify-between items-center mb-4">
+            <div className="space-y-0.5">
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <Clock className="w-4 h-4 text-emerald-500" />
+                Self-Healing Recovery Point Snapshots
+              </h2>
+              <p className={`text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                Rolling point-in-time recovery saves stored in browser localStorage.
+              </p>
+            </div>
+            <button
+              onClick={handleCreateManualBackup}
+              className="text-xs bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-750 px-2.5 py-1.5 rounded-xl text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer transition flex items-center gap-1"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Save Snapshot
+            </button>
           </div>
 
-          {driveConnected ? (
-            <div className="flex items-center gap-1.5 text-[10px] font-mono bg-emerald-500/15 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20 font-bold uppercase">
-              <CheckCircle className="w-3.5 h-3.5" />
-              Connected
+          {autoBackups.length === 0 ? (
+            <div className="p-6 rounded-xl border border-dashed border-slate-850 text-center text-xs text-slate-500">
+              No local backup snapshots currently stored. Snapshots save automatically before major mergers or linking operations.
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-[10px] font-mono bg-slate-950 text-slate-400 px-3 py-1 rounded-full border border-slate-800 uppercase">
-              Offline Standalone
+            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+              {autoBackups.map((backup) => (
+                <div key={backup.key} className={`p-3 rounded-xl border flex justify-between items-center gap-4 text-xs font-mono ${
+                  darkMode ? 'bg-slate-950/50 border-slate-850 hover:bg-slate-950' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }`}>
+                  <div className="flex items-center gap-2 truncate">
+                    <Database className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                    <span className="font-semibold text-slate-300 truncate text-[11px]">{backup.label}</span>
+                  </div>
+                  <button
+                    onClick={() => handleRestoreBackup(backup.key)}
+                    className="px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-lg text-[10px] font-semibold transition cursor-pointer flex items-center gap-1 font-sans shrink-0 border border-blue-500/15"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Restore
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        {/* Drive Synchronization control cards */}
-        {driveConnected ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-sans">
-            <div className="md:col-span-2 p-4 rounded-xl bg-slate-950/40 border border-slate-850 space-y-2">
-              <div className="flex items-center gap-2">
-                <Info className="w-4 h-4 text-blue-500 shrink-0" />
-                <span className="font-semibold text-slate-200 text-left">Google Drive Sync Activated</span>
+        {/* Diagnostic Metrics & Manual Operations */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          
+          {/* Diagnostic Metrics Card */}
+          <div className={`p-6 rounded-2xl border text-left ${
+            darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+          }`}>
+            <h2 className="text-sm font-bold flex items-center gap-2 mb-1">
+              <Database className="w-4 h-4 text-indigo-500" />
+              Local IndexedDB Cache
+            </h2>
+            <p className={`text-[11px] mb-4 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              Audit diagnostic statistics.
+            </p>
+
+            <div className="space-y-2 text-[10px] font-mono">
+              <div className="flex justify-between items-center py-1.5 border-b border-dashed border-slate-800">
+                <span className="opacity-60">tbl_diary</span>
+                <span className="font-bold">{stats.diary} rows</span>
               </div>
-              <p className="text-slate-400 text-[11px] leading-relaxed text-left">
-                Your offline browser IndexedDB data is linked. When triggering manual sync, a cloud snapshot clone file <code className="bg-slate-950 p-0.5 rounded text-blue-400 font-mono">workspace_sync.json</code> is written inside folder <code className="bg-slate-950 p-0.5 rounded text-purple-400 font-mono">JNAS_Workspace_Backups</code>.
+              <div className="flex justify-between items-center py-1.5 border-b border-dashed border-slate-800">
+                <span className="opacity-60">tbl_kanban_cards</span>
+                <span className="font-bold">{stats.kanban_cards} rows</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 border-b border-dashed border-slate-800">
+                <span className="opacity-60">tbl_whiteboard</span>
+                <span className="font-bold">{stats.whiteboard} rows</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 border-b border-dashed border-slate-800">
+                <span className="opacity-60">tbl_resources</span>
+                <span className="font-bold">{stats.resources} rows</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 border-b border-dashed border-slate-800">
+                <span className="opacity-60">tbl_snippets</span>
+                <span className="font-bold">{stats.code_snippets} rows</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5">
+                <span className="opacity-60">tbl_activities</span>
+                <span className="font-bold">{stats.activities} rows</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Export / Destructive Card */}
+          <div className={`p-6 rounded-2xl border text-left flex flex-col justify-between ${
+            darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+          }`}>
+            <div className="space-y-1">
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <Download className="w-4 h-4 text-indigo-500" />
+                Diagnostics Toolkit
+              </h2>
+              <p className={`text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                Offline file imports, Markdown exports, and factory resets.
               </p>
             </div>
 
-            <div className="flex flex-col gap-2 justify-center">
+            <div className="space-y-2 text-xs pt-4">
               <button
-                onClick={handleSyncDriveNow}
-                disabled={isDriveSyncing}
-                className="py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold transition cursor-pointer flex items-center justify-center gap-2"
+                onClick={handleExportDB}
+                className="w-full py-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-center font-semibold cursor-pointer transition flex justify-center items-center gap-1.5"
               >
-                {isDriveSyncing ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Syncing...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-4 h-4" />
-                    Synchronize Cloud Drive
-                  </>
-                )}
+                <Download className="w-3.5 h-3.5" />
+                Backup JSON
               </button>
 
               <button
-                onClick={() => setDriveConnected(false)}
-                className="py-1.5 text-rose-400 hover:text-rose-300 rounded-xl text-[10px] transition cursor-pointer font-mono font-bold"
+                onClick={handleExportMarkdown}
+                className="w-full py-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-center font-semibold cursor-pointer transition flex justify-center items-center gap-1.5"
               >
-                Disconnect Drive Sync
+                <FileDown className="w-3.5 h-3.5 text-emerald-500" />
+                Compile Diary MD
+              </button>
+
+              <div className="relative">
+                <input
+                  type="file"
+                  id="diagnostics-restore"
+                  accept=".json"
+                  onChange={handleImportDB}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="diagnostics-restore"
+                  className="w-full py-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-750 text-slate-300 hover:text-white rounded-xl font-semibold cursor-pointer transition flex justify-center items-center gap-1.5 text-center text-xs"
+                >
+                  <Upload className="w-3.5 h-3.5 text-purple-400" />
+                  Restore JSON
+                </label>
+              </div>
+
+              <button
+                onClick={handleClearDB}
+                className="w-full py-2 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/10 rounded-xl text-center font-semibold cursor-pointer transition flex justify-center items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Factory Reset
               </button>
             </div>
           </div>
-        ) : (
-          <div className="p-6 rounded-xl border border-dashed border-slate-800 text-center space-y-4">
-            <p className="text-slate-400 text-xs max-w-lg mx-auto">
-              Unlock cloud mirroring. Backups can automatically push to a designated, private Google Drive folder, allowing multi-device state loading.
-            </p>
-            <button
-              onClick={handleConnectGoogleDrive}
-              disabled={isDriveSyncing}
-              className="px-6 py-2.5 bg-slate-950 hover:bg-slate-850 text-white rounded-xl border border-slate-800 font-semibold cursor-pointer transition flex items-center justify-center gap-2 mx-auto"
-            >
-              {isDriveSyncing ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Requesting Auth Scope...
-                </>
-              ) : (
-                <>
-                  <Chrome className="w-4 h-4 text-blue-500" />
-                  Connect Google Drive Folder
-                </>
-              )}
-            </button>
-          </div>
-        )}
+
+        </div>
+
       </div>
 
     </div>

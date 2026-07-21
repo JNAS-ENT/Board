@@ -151,6 +151,111 @@ Guidelines:
               });
               return;
             }
+
+            // Local Mock for /api/sync
+            if (req.url?.startsWith('/api/sync')) {
+              const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+              
+              if (req.method === 'GET') {
+                const workspaceId = urlObj.searchParams.get('workspaceId');
+                const recoveryKey = urlObj.searchParams.get('recoveryKey');
+                
+                if (!workspaceId || !recoveryKey) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: 'Missing workspaceId or recoveryKey' }));
+                  return;
+                }
+                
+                // Use global memory store on server instance
+                const globalStore = (global as any).__localSyncStore || new Map();
+                (global as any).__localSyncStore = globalStore;
+                
+                const cached = globalStore.get(workspaceId);
+                if (!cached) {
+                  res.statusCode = 404;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: 'Workspace not found', code: 'NOT_FOUND' }));
+                  return;
+                }
+                
+                if (cached.recoveryKey !== recoveryKey) {
+                  res.statusCode = 403;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: 'Invalid recovery key', code: 'UNAUTHORIZED' }));
+                  return;
+                }
+                
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({
+                  success: true,
+                  workspaceId,
+                  dbData: cached.dbData,
+                  updatedAt: cached.updatedAt
+                }));
+                return;
+              }
+              
+              if (req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => {
+                  body += chunk;
+                });
+                req.on('end', () => {
+                  try {
+                    const parsed = JSON.parse(body);
+                    const { workspaceId, recoveryKey, dbData, updatedAt } = parsed;
+                    
+                    if (!workspaceId || !recoveryKey || !dbData || !updatedAt) {
+                      res.statusCode = 400;
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify({ error: 'Missing required sync fields' }));
+                      return;
+                    }
+                    
+                    const globalStore = (global as any).__localSyncStore || new Map();
+                    (global as any).__localSyncStore = globalStore;
+                    
+                    const existing = globalStore.get(workspaceId);
+                    if (existing) {
+                      if (existing.recoveryKey !== recoveryKey) {
+                        res.statusCode = 403;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: 'Invalid recovery key', code: 'UNAUTHORIZED' }));
+                        return;
+                      }
+                      
+                      const existingTime = new Date(existing.updatedAt).getTime();
+                      const incomingTime = new Date(updatedAt).getTime();
+                      if (incomingTime < existingTime) {
+                        res.statusCode = 409;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({
+                          error: 'Conflict: Server has a newer version',
+                          code: 'CONFLICT',
+                          serverUpdatedAt: existing.updatedAt
+                        }));
+                        return;
+                      }
+                    }
+                    
+                    globalStore.set(workspaceId, { recoveryKey, dbData, updatedAt });
+                    
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({
+                      success: true,
+                      workspaceId,
+                      updatedAt
+                    }));
+                  } catch (err: any) {
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: err?.message || String(err) }));
+                  }
+                });
+                return;
+              }
+            }
             next();
           });
         }
