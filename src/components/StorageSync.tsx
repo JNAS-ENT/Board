@@ -760,7 +760,7 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {isSupabaseConfigured ? (
+            {isSupabaseConfigured() ? (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 text-[11px] font-mono font-bold uppercase tracking-wider">
                 <Cloud className="w-3.5 h-3.5 shrink-0" />
                 <span>Supabase Realtime</span>

@@ -173,6 +173,14 @@ class SyncManager {
     this.notify();
   }
 
+  async onSupabaseConfigured(): Promise<void> {
+    console.log('[Sync Log] Supabase has been configured dynamically. Enrolling in Realtime channels and executing initial synchronizer...');
+    this.setupRealtimeSubscription();
+    await this.syncNow(true).catch(err => {
+      console.error('[Sync Log] Initial sync post-config failed:', err);
+    });
+  }
+
   markAsModified() {
     this.lastModifiedAt = new Date().toISOString();
     localStorage.setItem('jnas_last_modified_at', this.lastModifiedAt);
@@ -210,8 +218,8 @@ class SyncManager {
     this.updateStatus('syncing');
 
     try {
-      if (!isSupabaseConfigured) {
-        // --- FALLBACK MODE: REST API KV Synchronizer ---
+      if (!isSupabaseConfigured()) {
+        console.log('[Sync Log] Supabase is not configured yet. Running REST API KV Synchronizer Fallback...');
         await this.syncNowFallback(force);
         return;
       }
@@ -222,6 +230,7 @@ class SyncManager {
         throw new Error('Supabase client failed to initialize.');
       }
 
+      console.log(`[Sync Log] Supabase request sent: SELECT * FROM workspaces WHERE id = '${this.workspaceId}'. Table affected: workspaces.`);
       // 1. Ensure the workspace exists on Supabase
       const { data: wsRow, error: wsError } = await supabase
         .from('workspaces')
@@ -230,11 +239,15 @@ class SyncManager {
         .maybeSingle();
 
       if (wsError) {
+        console.error(`[Sync Log] Supabase request FAILED: SELECT FROM workspaces. Error: ${wsError.message}`);
         throw new Error(`Failed to query remote workspace: ${wsError.message}`);
       }
 
+      console.log(`[Sync Log] Supabase request SUCCESS: SELECT FROM workspaces. Found workspace: ${wsRow ? 'Yes' : 'No'}`);
+
       if (!wsRow) {
         // Register brand new workspace
+        console.log(`[Sync Log] Supabase request sent: INSERT INTO workspaces with ID '${this.workspaceId}'. Table affected: workspaces.`);
         const { error: insertError } = await supabase
           .from('workspaces')
           .insert({
@@ -242,9 +255,10 @@ class SyncManager {
             recovery_key_hash: this.recoveryKeyHash
           });
         if (insertError) {
+          console.error(`[Sync Log] Supabase request FAILED: INSERT INTO workspaces. Error: ${insertError.message}`);
           throw new Error(`Failed to register workspace: ${insertError.message}`);
         }
-        console.log(`[Supabase Sync] Registered workspace: ${this.workspaceId}`);
+        console.log(`[Sync Log] Supabase request SUCCESS: Registered workspace: ${this.workspaceId}`);
       } else if (wsRow.recovery_key_hash !== this.recoveryKeyHash) {
         throw new Error('Unauthorized workspace credentials. Recovery Key mismatch!');
       }
@@ -269,9 +283,9 @@ class SyncManager {
       localStorage.setItem('jnas_needs_sync', 'false');
       this.updateStatus('idle');
 
-      console.log(`[Supabase Sync] Workspace ${this.workspaceId} synced incrementally with success.`);
+      console.log(`[Sync Log] Workspace ${this.workspaceId} synced incrementally with success.`);
     } catch (err: any) {
-      console.error('Supabase Sync execution error:', err);
+      console.error('[Sync Log] Supabase Sync execution error:', err);
       this.updateStatus('error', err?.message || String(err));
       throw err;
     }
@@ -290,8 +304,9 @@ class SyncManager {
     try {
       const hashedKey = await hashPassword(targetRecoveryKey);
 
-      if (isSupabaseConfigured) {
+      if (isSupabaseConfigured()) {
         // --- SUPABASE CONNECT FLOW ---
+        console.log(`[Sync Log] Supabase request sent: SELECT * FROM workspaces to authorize target workspace: ${targetWorkspaceId}. Table affected: workspaces.`);
         const supabase = getSupabaseClient(targetWorkspaceId, hashedKey);
         if (!supabase) throw new Error('Supabase Client initialization error.');
 
@@ -302,6 +317,7 @@ class SyncManager {
           .maybeSingle();
 
         if (wsError) {
+          console.error(`[Sync Log] Supabase request FAILED: SELECT FROM workspaces. Error: ${wsError.message}`);
           throw new Error(`Authentication server error: ${wsError.message}`);
         }
 
@@ -312,6 +328,8 @@ class SyncManager {
         if (wsRow.recovery_key_hash !== hashedKey) {
           throw new Error('Invalid Recovery Key. Access Denied.');
         }
+
+        console.log(`[Sync Log] Supabase authorization SUCCESS for workspace: ${targetWorkspaceId}`);
 
         // Safety backup of existing data
         await this.createAutoBackup('pre-connect-backup');
@@ -325,8 +343,13 @@ class SyncManager {
 
         // Fetch all remote data table-by-table and populate IndexedDB
         const getRemoteItems = async (tableName: string) => {
+          console.log(`[Sync Log] Supabase request sent: SELECT * FROM ${tableName} WHERE workspace_id = '${targetWorkspaceId}'. Table affected: ${tableName}.`);
           const { data, error } = await supabase.from(tableName).select('*').eq('workspace_id', targetWorkspaceId);
-          if (error) throw error;
+          if (error) {
+            console.error(`[Sync Log] Supabase request FAILED: SELECT FROM ${tableName}. Error: ${error.message}`);
+            throw error;
+          }
+          console.log(`[Sync Log] Supabase request SUCCESS: SELECT FROM ${tableName}. Table affected: ${tableName}. Rows downloaded: ${data?.length || 0}`);
           return data || [];
         };
 
@@ -400,7 +423,7 @@ class SyncManager {
    * Subscribes to Supabase Postgres replication channels for absolute real-time updates.
    */
   private setupRealtimeSubscription() {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured()) return;
     if (this.subscribedWorkspaceId === this.workspaceId && this.realtimeChannel) {
       return; // Already subscribed to this workspace
     }
@@ -472,6 +495,7 @@ class SyncManager {
     localCompareField: string,
     remoteCompareField: string
   ): Promise<void> {
+    console.log(`[Sync Log] Supabase request sent: SELECT * FROM ${tableName} WHERE workspace_id = '${this.workspaceId}'. Table affected: ${tableName}.`);
     // 1. Read remote records from Supabase
     const { data: remoteRows, error: remoteError } = await supabase
       .from(tableName)
@@ -479,8 +503,12 @@ class SyncManager {
       .eq('workspace_id', this.workspaceId);
 
     if (remoteError) {
+      console.error(`[Sync Log] Supabase request FAILED: SELECT FROM ${tableName}. Error: ${remoteError.message}`);
       throw new Error(`Failed to download rows for ${tableName}: ${remoteError.message}`);
     }
+
+    const downloadedCount = remoteRows?.length || 0;
+    console.log(`[Sync Log] Supabase request SUCCESS: SELECT FROM ${tableName}. Rows downloaded: ${downloadedCount}`);
 
     // 2. Read local records from IndexedDB
     const localItems = await db.getStoreItems<any>(storeName);
@@ -495,6 +523,8 @@ class SyncManager {
       if (row && row.id) remoteMap.set(row.id, row);
     });
 
+    let uploadedCount = 0;
+
     // 3. Process local items -> push or update to Supabase
     for (const [id, localItem] of localMap.entries()) {
       const remoteRow = remoteMap.get(id);
@@ -502,9 +532,13 @@ class SyncManager {
       if (!remoteRow) {
         // Record is new on client. Upload to Supabase
         const insertPayload = this.mapLocalToRow(storeName, localItem);
+        console.log(`[Sync Log] Supabase request sent: INSERT INTO ${tableName} with ID '${id}'. Table affected: ${tableName}.`);
         const { error: insertError } = await supabase.from(tableName).insert(insertPayload);
         if (insertError) {
-          console.error(`[Incremental PUSH] Insert failed for ${storeName}/${id}:`, insertError);
+          console.error(`[Sync Log] Supabase request FAILED: INSERT INTO ${tableName} with ID '${id}'. Error: ${insertError.message}`);
+        } else {
+          uploadedCount++;
+          console.log(`[Sync Log] Supabase request SUCCESS: INSERT INTO ${tableName} with ID '${id}'. Rows uploaded: 1`);
         }
       } else {
         // Both exist. Compare timestamps to resolve conflicts
@@ -517,14 +551,20 @@ class SyncManager {
 
           if (localTime > remoteTime + 10) { // Keep safety margin of 10ms
             const updatePayload = this.mapLocalToRow(storeName, localItem);
+            console.log(`[Sync Log] Supabase request sent: UPDATE ${tableName} SET ... WHERE id = '${id}'. Table affected: ${tableName}.`);
             const { error: updateError } = await supabase.from(tableName).update(updatePayload).eq('id', id);
             if (updateError) {
-              console.error(`[Incremental UPDATE] Upload failed for ${storeName}/${id}:`, updateError);
+              console.error(`[Sync Log] Supabase request FAILED: UPDATE ${tableName} with ID '${id}'. Error: ${updateError.message}`);
+            } else {
+              uploadedCount++;
+              console.log(`[Sync Log] Supabase request SUCCESS: UPDATE ${tableName} with ID '${id}'. Rows uploaded: 1`);
             }
           }
         }
       }
     }
+
+    let mergedCount = 0;
 
     // 4. Process remote items -> download or overwrite to IndexedDB
     for (const [id, remoteRow] of remoteMap.entries()) {
@@ -534,6 +574,7 @@ class SyncManager {
         // Record is missing on client. Download it
         const localRepresentation = this.mapRowToLocal(storeName, remoteRow);
         await db.putItemDirect(storeName, localRepresentation);
+        mergedCount++;
       } else {
         const localTimeStr = localItem[localCompareField] || localItem.createdAt || localItem.timestamp;
         const remoteTimeStr = remoteRow[remoteCompareField];
@@ -545,10 +586,17 @@ class SyncManager {
           if (remoteTime > localTime + 10) {
             const localRepresentation = this.mapRowToLocal(storeName, remoteRow);
             await db.putItemDirect(storeName, localRepresentation);
+            mergedCount++;
           }
         }
       }
     }
+
+    if (mergedCount > 0) {
+      console.log(`[Sync Log] Applied ${mergedCount} remote modifications for ${storeName} locally.`);
+    }
+
+    console.log(`[Sync Log] Sync completed for ${tableName}. Total rows uploaded: ${uploadedCount}, Total rows downloaded: ${downloadedCount}`);
   }
 
   /**
@@ -1007,7 +1055,7 @@ class SyncManager {
    * Directly write or delete a single item to Supabase for immediate, zero-latency sync.
    */
   async syncItem(storeName: string, item: any, action: 'put' | 'delete'): Promise<void> {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured()) return;
 
     const supabase = getSupabaseClient(this.workspaceId, this.recoveryKeyHash);
     if (!supabase) return;
@@ -1018,25 +1066,31 @@ class SyncManager {
     try {
       if (action === 'put') {
         const payload = this.mapLocalToRow(storeName, item);
+        console.log(`[Sync Log] Supabase request sent: UPSERT INTO ${tableName} with ID '${item.id}'. Table affected: ${tableName}.`);
         const { error } = await supabase.from(tableName).upsert(payload);
         if (error) {
-          console.error(`[Immediate Sync] Failed to upsert to ${tableName}:`, error.message);
+          console.error(`[Sync Log] Supabase request FAILED: UPSERT INTO ${tableName} with ID '${item.id}'. Error: ${error.message}`);
           throw error;
+        } else {
+          console.log(`[Sync Log] Supabase request SUCCESS: UPSERT INTO ${tableName} with ID '${item.id}'. Rows affected: 1`);
         }
       } else if (action === 'delete') {
         const id = typeof item === 'object' ? item.id : item;
+        console.log(`[Sync Log] Supabase request sent: DELETE FROM ${tableName} with ID '${id}'. Table affected: ${tableName}.`);
         const { error } = await supabase
           .from(tableName)
           .delete()
           .eq('id', id)
           .eq('workspace_id', this.workspaceId);
         if (error) {
-          console.error(`[Immediate Sync] Failed to delete from ${tableName}:`, error.message);
+          console.error(`[Sync Log] Supabase request FAILED: DELETE FROM ${tableName} with ID '${id}'. Error: ${error.message}`);
           throw error;
+        } else {
+          console.log(`[Sync Log] Supabase request SUCCESS: DELETE FROM ${tableName} with ID '${id}'. Rows affected: 1`);
         }
       }
     } catch (err) {
-      console.warn(`[Immediate Sync] Failed for ${storeName}, scheduling background sync fallback:`, err);
+      console.warn(`[Sync Log] Immediate Sync exception for ${storeName} (scheduling background fallback):`, err);
       this.markAsModified();
     }
   }

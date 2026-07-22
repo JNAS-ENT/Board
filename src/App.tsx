@@ -55,28 +55,37 @@ export default function App() {
   const [syncState, setSyncState] = useState(() => syncManager.getState());
 
   useEffect(() => {
-    // 1. Fetch dynamic Supabase credentials from the Cloudflare server environment
-    fetch('/api/config')
-      .then(res => res.json())
-      .then(config => {
+    const initializeApp = async () => {
+      try {
+        // 1. Fetch dynamic Supabase credentials from the Cloudflare server environment
+        const configRes = await fetch('/api/config');
+        const config = await configRes.json();
+        
         if (config && config.isConfigured) {
           configureSupabase(config.supabaseUrl, config.supabaseAnonKey);
+          // Register dynamic configure and trigger setup
+          await syncManager.onSupabaseConfigured();
         }
-      })
-      .catch(err => {
+      } catch (err) {
         console.warn('[Startup] Dynamic Supabase config retrieval skipped/failed:', err);
-      })
-      .finally(() => {
-        // 2. Initialize local database
-        db.init()
-          .then(() => {
-            setDbInitialized(true);
-          })
-          .catch((err) => {
-            console.error("Failed to initialize system database:", err);
-            setDbError(err?.message || String(err));
-          });
-      });
+      } finally {
+        try {
+          // 2. Initialize local database
+          await db.init();
+
+          // 3. On startup, download the latest workspace from Supabase before rendering local data
+          console.log('[Startup] Performing initial startup synchronization...');
+          await syncManager.syncNow(true);
+          
+          setDbInitialized(true);
+        } catch (err: any) {
+          console.error("Failed to initialize system database:", err);
+          setDbError(err?.message || String(err));
+        }
+      }
+    };
+
+    initializeApp();
 
     // Subscribe to syncManager to get reactive status changes
     const unsubscribe = syncManager.subscribe((state) => {

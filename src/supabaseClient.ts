@@ -43,7 +43,9 @@ const isValidKey = (key: string): boolean => {
 let activeUrl = isValidUrl(dynamicSupabaseUrl) ? dynamicSupabaseUrl.trim() : '';
 let activeKey = isValidKey(dynamicSupabaseAnonKey) ? dynamicSupabaseAnonKey.trim() : '';
 
-export let isSupabaseConfigured = Boolean(activeUrl && activeKey);
+export function isSupabaseConfigured(): boolean {
+  return Boolean(activeUrl && activeKey);
+}
 
 // Cache client instances per workspace credentials to optimize connection pooling and subscription management
 const clientCache = new Map<string, SupabaseClient>();
@@ -53,7 +55,6 @@ export function configureSupabase(url: string, key: string): boolean {
   if (isValidUrl(url) && isValidKey(key)) {
     activeUrl = url.trim();
     activeKey = key.trim();
-    isSupabaseConfigured = true;
     
     // Clear cache to recreate clients with the new URL/key
     clientCache.clear();
@@ -74,7 +75,7 @@ export function configureSupabase(url: string, key: string): boolean {
  * loaded dynamically into global config to authorize Row Level Security (RLS) policies.
  */
 export function getSupabaseClient(workspaceId: string, recoveryKeyHash: string): SupabaseClient | null {
-  if (!isSupabaseConfigured) {
+  if (!isSupabaseConfigured()) {
     return null;
   }
 
@@ -104,8 +105,11 @@ export function getSupabaseClient(workspaceId: string, recoveryKeyHash: string):
 /**
  * Get the underlying raw Supabase Client if needed.
  */
-export let rawSupabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(activeUrl, activeKey, {
-      auth: { persistSession: false }
-    })
-  : null;
+export let rawSupabase: SupabaseClient | null = null;
+
+// Initialize rawSupabase dynamically on startup if configured
+if (isSupabaseConfigured()) {
+  rawSupabase = createClient(activeUrl, activeKey, {
+    auth: { persistSession: false }
+  });
+}
