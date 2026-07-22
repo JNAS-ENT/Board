@@ -21,6 +21,15 @@ export default defineConfig(() => {
               res.end(JSON.stringify({ status: 'ok' }));
               return;
             }
+            if (req.url?.startsWith('/api/config')) {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({
+                supabaseUrl: (process.env.VITE_SUPABASE_URL || '').trim(),
+                supabaseAnonKey: (process.env.VITE_SUPABASE_ANON_KEY || '').trim(),
+                isConfigured: Boolean((process.env.VITE_SUPABASE_URL || '').trim() && (process.env.VITE_SUPABASE_ANON_KEY || '').trim())
+              }));
+              return;
+            }
             if (req.url?.startsWith('/api/enrich') && req.method === 'POST') {
               let body = '';
               req.on('data', chunk => {

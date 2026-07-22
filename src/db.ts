@@ -14,6 +14,7 @@ const DB_VERSION = 1;
 class WorkspaceDB {
   private db: IDBDatabase | null = null;
   public onModified: (() => void) | null = null;
+  public onSyncItem: ((storeName: string, item: any, action: 'put' | 'delete') => void) | null = null;
 
   init(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -91,6 +92,7 @@ class WorkspaceDB {
         const store = this.getStore(storeName, 'readwrite');
         const request = store.put(item);
         request.onsuccess = () => {
+          if (this.onSyncItem) this.onSyncItem(storeName, item, 'put');
           if (this.onModified) this.onModified();
           resolve();
         };
@@ -151,6 +153,7 @@ class WorkspaceDB {
         const request = store.delete(id);
         request.onsuccess = () => {
           this.trackDeletion(storeName, id);
+          if (this.onSyncItem) this.onSyncItem(storeName, id, 'delete');
           if (this.onModified) this.onModified();
           resolve();
         };
@@ -169,14 +172,20 @@ class WorkspaceDB {
   }
 
   saveDiaryEntry(entry: DiaryEntry): Promise<void> {
-    return this.put('diary', entry).then(() => {
+    const now = new Date().toISOString();
+    const updatedEntry = {
+      ...entry,
+      createdAt: entry.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('diary', updatedEntry).then(() => {
       this.logActivity({
         id: crypto.randomUUID(),
         type: 'diary',
         action: 'update',
         title: entry.title || 'Untitled Entry',
         details: `Saved diary entry. Content length: ${entry.content.length} characters.`,
-        timestamp: new Date().toISOString()
+        timestamp: now
       });
     });
   }
@@ -202,7 +211,13 @@ class WorkspaceDB {
   }
 
   saveKanbanColumn(col: KanbanColumn): Promise<void> {
-    return this.put('kanban_columns', col);
+    const now = new Date().toISOString();
+    const updatedCol = {
+      ...col,
+      createdAt: col.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('kanban_columns', updatedCol);
   }
 
   deleteKanbanColumn(id: string): Promise<void> {
@@ -216,14 +231,20 @@ class WorkspaceDB {
   }
 
   saveKanbanCard(card: KanbanCard, actionType: 'create' | 'update' = 'update'): Promise<void> {
-    return this.put('kanban_cards', card).then(() => {
+    const now = new Date().toISOString();
+    const updatedCard = {
+      ...card,
+      createdAt: card.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('kanban_cards', updatedCard).then(() => {
       this.logActivity({
         id: crypto.randomUUID(),
         type: 'kanban',
         action: actionType,
         title: card.title,
         details: `Task moved or updated. Progress: ${card.progress}%.`,
-        timestamp: new Date().toISOString()
+        timestamp: now
       });
     });
   }
@@ -247,20 +268,38 @@ class WorkspaceDB {
   }
 
   saveWhiteboardElement(elem: WhiteboardElement): Promise<void> {
-    return this.put('whiteboard', elem);
+    const now = new Date().toISOString();
+    const updatedElem = {
+      ...elem,
+      createdAt: elem.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('whiteboard', updatedElem);
   }
 
   saveWhiteboardElements(elements: WhiteboardElement[]): Promise<void> {
+    const now = new Date().toISOString();
+    const updatedElements = elements.map(elem => ({
+      ...elem,
+      createdAt: elem.createdAt || now,
+      updatedAt: now
+    }));
+
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not initialized'));
       const transaction = this.db.transaction('whiteboard', 'readwrite');
       const store = transaction.objectStore('whiteboard');
       
-      elements.forEach(elem => {
+      updatedElements.forEach(elem => {
         store.put(elem);
       });
 
       transaction.oncomplete = () => {
+        if (this.onSyncItem) {
+          updatedElements.forEach(elem => {
+            this.onSyncItem!('whiteboard', elem, 'put');
+          });
+        }
         if (this.onModified) this.onModified();
         resolve();
       };
@@ -275,14 +314,30 @@ class WorkspaceDB {
   clearWhiteboard(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not initialized'));
-      const transaction = this.db.transaction('whiteboard', 'readwrite');
-      const store = transaction.objectStore('whiteboard');
-      const request = store.clear();
-      request.onsuccess = () => {
-        if (this.onModified) this.onModified();
-        resolve();
+      
+      // Get all local items before clearing to record their IDs for deletions
+      const transactionRead = this.db.transaction('whiteboard', 'readonly');
+      const storeRead = transactionRead.objectStore('whiteboard');
+      const requestGetAll = storeRead.getAll();
+      
+      requestGetAll.onsuccess = () => {
+        const elements = requestGetAll.result;
+        
+        const transactionWrite = this.db!.transaction('whiteboard', 'readwrite');
+        const storeWrite = transactionWrite.objectStore('whiteboard');
+        const requestClear = storeWrite.clear();
+        
+        requestClear.onsuccess = () => {
+          elements.forEach(elem => {
+            this.trackDeletion('whiteboard', elem.id);
+            if (this.onSyncItem) this.onSyncItem('whiteboard', elem.id, 'delete');
+          });
+          if (this.onModified) this.onModified();
+          resolve();
+        };
+        requestClear.onerror = () => reject(requestClear.error);
       };
-      request.onerror = () => reject(request.error);
+      requestGetAll.onerror = () => reject(requestGetAll.error);
     });
   }
 
@@ -294,14 +349,20 @@ class WorkspaceDB {
   }
 
   saveResource(res: Resource, actionType: 'create' | 'update' = 'update'): Promise<void> {
-    return this.put('resources', res).then(() => {
+    const now = new Date().toISOString();
+    const updatedRes = {
+      ...res,
+      createdAt: res.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('resources', updatedRes).then(() => {
       this.logActivity({
         id: crypto.randomUUID(),
         type: 'resource',
         action: actionType,
         title: res.title,
         details: `Saved resource link under category: ${res.category}.`,
-        timestamp: new Date().toISOString()
+        timestamp: now
       });
     });
   }
@@ -327,14 +388,20 @@ class WorkspaceDB {
   }
 
   saveCodeSnippet(snippet: CodeSnippet, actionType: 'create' | 'update' = 'update'): Promise<void> {
-    return this.put('code_snippets', snippet).then(() => {
+    const now = new Date().toISOString();
+    const updatedSnippet = {
+      ...snippet,
+      createdAt: snippet.createdAt || now,
+      updatedAt: now
+    };
+    return this.put('code_snippets', updatedSnippet).then(() => {
       this.logActivity({
         id: crypto.randomUUID(),
         type: 'code',
         action: actionType,
         title: snippet.title,
         details: `Saved snippet with syntax highlighting for: ${snippet.language}.`,
-        timestamp: new Date().toISOString()
+        timestamp: now
       });
     });
   }

@@ -10,6 +10,8 @@ export interface KanbanColumn {
   id: string;
   title: string;
   order: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface KanbanAttachment {
@@ -29,6 +31,7 @@ export interface KanbanCard {
   attachments: KanbanAttachment[];
   order: number;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface WhiteboardElement {
@@ -56,6 +59,8 @@ export interface WhiteboardElement {
   roundedCorners?: boolean;
   imageUrl?: string;
   iconName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ResourceMetadata {
@@ -75,6 +80,7 @@ export interface Resource {
   notes: string;
   metadata?: ResourceMetadata;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface CodeSnippet {
@@ -84,6 +90,7 @@ export interface CodeSnippet {
   language: string;
   notes: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface RecentActivity {

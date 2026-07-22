@@ -33,6 +33,7 @@ import Search from './components/Search';
 import StorageSync from './components/StorageSync';
 import { db } from './db';
 import { syncManager } from './syncManager';
+import { configureSupabase } from './supabaseClient';
 
 export default function App() {
   // Database initialization state
@@ -54,13 +55,27 @@ export default function App() {
   const [syncState, setSyncState] = useState(() => syncManager.getState());
 
   useEffect(() => {
-    db.init()
-      .then(() => {
-        setDbInitialized(true);
+    // 1. Fetch dynamic Supabase credentials from the Cloudflare server environment
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(config => {
+        if (config && config.isConfigured) {
+          configureSupabase(config.supabaseUrl, config.supabaseAnonKey);
+        }
       })
-      .catch((err) => {
-        console.error("Failed to initialize system database:", err);
-        setDbError(err?.message || String(err));
+      .catch(err => {
+        console.warn('[Startup] Dynamic Supabase config retrieval skipped/failed:', err);
+      })
+      .finally(() => {
+        // 2. Initialize local database
+        db.init()
+          .then(() => {
+            setDbInitialized(true);
+          })
+          .catch((err) => {
+            console.error("Failed to initialize system database:", err);
+            setDbError(err?.message || String(err));
+          });
       });
 
     // Subscribe to syncManager to get reactive status changes

@@ -31,6 +31,11 @@ class SyncManager {
     db.onModified = () => {
       this.markAsModified();
     };
+    db.onSyncItem = (storeName, item, action) => {
+      this.syncItem(storeName, item, action).catch(err => {
+        console.error(`[onSyncItem] Failed to sync ${storeName}:`, err);
+      });
+    };
 
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
@@ -219,7 +224,7 @@ class SyncManager {
 
       // 1. Ensure the workspace exists on Supabase
       const { data: wsRow, error: wsError } = await supabase
-        .from('jnas_workspaces')
+        .from('workspaces')
         .select('*')
         .eq('id', this.workspaceId)
         .maybeSingle();
@@ -231,7 +236,7 @@ class SyncManager {
       if (!wsRow) {
         // Register brand new workspace
         const { error: insertError } = await supabase
-          .from('jnas_workspaces')
+          .from('workspaces')
           .insert({
             id: this.workspaceId,
             recovery_key_hash: this.recoveryKeyHash
@@ -251,13 +256,13 @@ class SyncManager {
       await this.flushPendingDeletions(supabase);
 
       // 3. Two-way Incremental Sync for each IndexedDB collection
-      await this.syncStoreIncremental(supabase, 'diary', 'jnas_diary', 'updatedAt', 'updated_at');
-      await this.syncStoreIncremental(supabase, 'kanban_columns', 'jnas_kanban_columns', 'id', 'id');
-      await this.syncStoreIncremental(supabase, 'kanban_cards', 'jnas_kanban_cards', 'id', 'id');
-      await this.syncStoreIncremental(supabase, 'whiteboard', 'jnas_whiteboard', 'id', 'id');
-      await this.syncStoreIncremental(supabase, 'resources', 'jnas_resources', 'createdAt', 'created_at');
-      await this.syncStoreIncremental(supabase, 'code_snippets', 'jnas_code_snippets', 'createdAt', 'created_at');
-      await this.syncStoreIncremental(supabase, 'activities', 'jnas_activities', 'timestamp', 'timestamp');
+      await this.syncStoreIncremental(supabase, 'diary', 'journal', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'kanban_columns', 'kanban_columns', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'kanban_cards', 'kanban_cards', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'whiteboard', 'whiteboard', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'resources', 'resources', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'code_snippets', 'snippets', 'updatedAt', 'updated_at');
+      await this.syncStoreIncremental(supabase, 'activities', 'activities', 'timestamp', 'timestamp');
 
       this.lastSyncedAt = new Date().toISOString();
       localStorage.setItem('jnas_last_synced_at', this.lastSyncedAt);
@@ -291,7 +296,7 @@ class SyncManager {
         if (!supabase) throw new Error('Supabase Client initialization error.');
 
         const { data: wsRow, error: wsError } = await supabase
-          .from('jnas_workspaces')
+          .from('workspaces')
           .select('*')
           .eq('id', targetWorkspaceId)
           .maybeSingle();
@@ -325,13 +330,13 @@ class SyncManager {
           return data || [];
         };
 
-        const diaryRows = await getRemoteItems('jnas_diary');
-        const columnRows = await getRemoteItems('jnas_kanban_columns');
-        const cardRows = await getRemoteItems('jnas_kanban_cards');
-        const whiteboardRows = await getRemoteItems('jnas_whiteboard');
-        const resourceRows = await getRemoteItems('jnas_resources');
-        const snippetRows = await getRemoteItems('jnas_code_snippets');
-        const activityRows = await getRemoteItems('jnas_activities');
+        const diaryRows = await getRemoteItems('journal');
+        const columnRows = await getRemoteItems('kanban_columns');
+        const cardRows = await getRemoteItems('kanban_cards');
+        const whiteboardRows = await getRemoteItems('whiteboard');
+        const resourceRows = await getRemoteItems('resources');
+        const snippetRows = await getRemoteItems('snippets');
+        const activityRows = await getRemoteItems('activities');
 
         // Clear local and restore
         const mergedData = {
@@ -418,13 +423,13 @@ class SyncManager {
     };
 
     this.realtimeChannel = supabase.channel(`jnas_rt_pub_${this.workspaceId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_diary', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('diary', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_whiteboard', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('whiteboard', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_kanban_columns', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('kanban_columns', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_kanban_cards', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('kanban_cards', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_resources', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('resources', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_code_snippets', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('code_snippets', p))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jnas_activities', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('activities', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'journal', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('diary', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'whiteboard', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('whiteboard', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'kanban_columns', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('kanban_columns', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'kanban_cards', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('kanban_cards', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'resources', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('resources', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'snippets', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('code_snippets', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activities', filter: `workspace_id=eq.${this.workspaceId}` }, (p) => handlePayload('activities', p))
       .subscribe((status) => {
         console.log(`[Realtime Sync] Subscription status updated: ${status}`);
       });
@@ -584,13 +589,13 @@ class SyncManager {
 
   private getTableNameFromStore(storeName: string): string | null {
     switch (storeName) {
-      case 'diary': return 'jnas_diary';
-      case 'whiteboard': return 'jnas_whiteboard';
-      case 'kanban_columns': return 'jnas_kanban_columns';
-      case 'kanban_cards': return 'jnas_kanban_cards';
-      case 'resources': return 'jnas_resources';
-      case 'code_snippets': return 'jnas_code_snippets';
-      case 'activities': return 'jnas_activities';
+      case 'diary': return 'journal';
+      case 'whiteboard': return 'whiteboard';
+      case 'kanban_columns': return 'kanban_columns';
+      case 'kanban_cards': return 'kanban_cards';
+      case 'resources': return 'resources';
+      case 'code_snippets': return 'snippets';
+      case 'activities': return 'activities';
       default: return null;
     }
   }
@@ -826,13 +831,17 @@ class SyncManager {
           opacity: row.opacity !== null ? row.opacity : undefined,
           roundedCorners: row.rounded_corners,
           imageUrl: row.image_url !== null ? row.image_url : undefined,
-          iconName: row.icon_name !== null ? row.icon_name : undefined
+          iconName: row.icon_name !== null ? row.icon_name : undefined,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       case 'kanban_columns':
         return {
           id: row.id,
           title: row.title,
-          order: row.order_num
+          order: row.order_num,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       case 'kanban_cards':
         return {
@@ -845,7 +854,8 @@ class SyncManager {
           labels: Array.isArray(row.labels) ? row.labels : [],
           attachments: Array.isArray(row.attachments) ? row.attachments : [],
           order: row.order_num,
-          createdAt: row.created_at
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       case 'resources':
         return {
@@ -855,7 +865,8 @@ class SyncManager {
           category: row.category,
           notes: row.notes,
           metadata: row.metadata !== null ? row.metadata : undefined,
-          createdAt: row.created_at
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       case 'code_snippets':
         return {
@@ -864,7 +875,8 @@ class SyncManager {
           code: row.code,
           language: row.language,
           notes: row.notes,
-          createdAt: row.created_at
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       case 'activities':
         return {
@@ -920,8 +932,8 @@ class SyncManager {
           rounded_corners: item.roundedCorners || false,
           image_url: item.imageUrl !== undefined ? item.imageUrl : null,
           icon_name: item.iconName !== undefined ? item.iconName : null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: item.createdAt || new Date().toISOString(),
+          updated_at: item.updatedAt || new Date().toISOString(),
           version: 1
         };
       case 'kanban_columns':
@@ -930,8 +942,8 @@ class SyncManager {
           workspace_id: this.workspaceId,
           title: item.title,
           order_num: item.order,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: item.createdAt || new Date().toISOString(),
+          updated_at: item.updatedAt || new Date().toISOString(),
           version: 1
         };
       case 'kanban_cards':
@@ -947,7 +959,7 @@ class SyncManager {
           attachments: item.attachments || [],
           order_num: item.order,
           created_at: item.createdAt || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          updated_at: item.updatedAt || new Date().toISOString(),
           version: 1
         };
       case 'resources':
@@ -959,8 +971,8 @@ class SyncManager {
           category: item.category,
           notes: item.notes || '',
           metadata: item.metadata || {},
-          created_at: item.createdAt,
-          updated_at: item.createdAt,
+          created_at: item.createdAt || new Date().toISOString(),
+          updated_at: item.updatedAt || new Date().toISOString(),
           version: 1
         };
       case 'code_snippets':
@@ -971,8 +983,8 @@ class SyncManager {
           code: item.code || '',
           language: item.language || 'typescript',
           notes: item.notes || '',
-          created_at: item.createdAt,
-          updated_at: item.createdAt,
+          created_at: item.createdAt || new Date().toISOString(),
+          updated_at: item.updatedAt || new Date().toISOString(),
           version: 1
         };
       case 'activities':
@@ -988,6 +1000,44 @@ class SyncManager {
         };
       default:
         return item;
+    }
+  }
+
+  /**
+   * Directly write or delete a single item to Supabase for immediate, zero-latency sync.
+   */
+  async syncItem(storeName: string, item: any, action: 'put' | 'delete'): Promise<void> {
+    if (!isSupabaseConfigured) return;
+
+    const supabase = getSupabaseClient(this.workspaceId, this.recoveryKeyHash);
+    if (!supabase) return;
+
+    const tableName = this.getTableNameFromStore(storeName);
+    if (!tableName) return;
+
+    try {
+      if (action === 'put') {
+        const payload = this.mapLocalToRow(storeName, item);
+        const { error } = await supabase.from(tableName).upsert(payload);
+        if (error) {
+          console.error(`[Immediate Sync] Failed to upsert to ${tableName}:`, error.message);
+          throw error;
+        }
+      } else if (action === 'delete') {
+        const id = typeof item === 'object' ? item.id : item;
+        const { error } = await supabase
+          .from(tableName)
+          .delete()
+          .eq('id', id)
+          .eq('workspace_id', this.workspaceId);
+        if (error) {
+          console.error(`[Immediate Sync] Failed to delete from ${tableName}:`, error.message);
+          throw error;
+        }
+      }
+    } catch (err) {
+      console.warn(`[Immediate Sync] Failed for ${storeName}, scheduling background sync fallback:`, err);
+      this.markAsModified();
     }
   }
 }
