@@ -3,8 +3,9 @@
 -- PRODUCTION READY, ZERO-LOGIN OFFLINE-FIRST SECURE REPLICATION
 -- ===========================================================================
 
--- Enable extension for UUID generation if not already active
+-- Enable extensions for UUID generation and cryptographic functions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ---------------------------------------------------------------------------
 -- TRIGGER FUNCTION FOR UPDATING TIMESTAMPS
@@ -445,11 +446,11 @@ CREATE POLICY "audit_logs_authorized_access" ON audit_logs
 -- Enlists tables into the 'supabase_realtime' publication for push-notifications
 -- ===========================================================================
 BEGIN;
-  -- Remove existing publications if any to avoid collision
-  DROP PUBLICATION IF EXISTS jnas_realtime_pub;
+  -- Remove existing publication if any to avoid collision
+  DROP PUBLICATION IF EXISTS supabase_realtime;
   
-  -- Create publication for our synchronized tables
-  CREATE PUBLICATION jnas_realtime_pub FOR TABLE 
+  -- Create publication for our synchronized tables using standard supabase_realtime name
+  CREATE PUBLICATION supabase_realtime FOR TABLE 
     workspaces,
     user_preferences,
     settings,
