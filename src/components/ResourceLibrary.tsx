@@ -60,6 +60,14 @@ export default function ResourceLibrary({ darkMode, triggerRefresh }: ResourceLi
 
   useEffect(() => {
     loadData();
+
+    const handleDbUpdated = () => {
+      loadData();
+    };
+    window.addEventListener('jnas_db_updated', handleDbUpdated);
+    return () => {
+      window.removeEventListener('jnas_db_updated', handleDbUpdated);
+    };
   }, []);
 
   // Enrich & Add Resource link

@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { db } from '../db';
 import { syncManager, SyncState } from '../syncManager';
+import { isSupabaseConfigured } from '../supabaseClient';
 import {
   hashPassword,
   encryptData,
@@ -153,7 +154,17 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
       setSyncState(state);
     });
 
-    return () => unsubscribe();
+    const handleDbUpdated = () => {
+      loadStats();
+      setAutoBackups(syncManager.getAutoBackups());
+      setAuditLogs(getSecurityAuditLogs());
+    };
+    window.addEventListener('jnas_db_updated', handleDbUpdated);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('jnas_db_updated', handleDbUpdated);
+    };
   }, []);
 
   // Stub locks to keep them open
@@ -220,7 +231,7 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
   const handleRegenerateKey = () => {
     triggerPasswordChallenge(async () => {
       try {
-        const newKey = syncManager.regenerateRecoveryKey();
+        const newKey = await syncManager.regenerateRecoveryKey();
         setUnlockedKey(newKey);
         showSuccess('Recovery key regenerated and updated!');
         await logSecurityEvent('Recovery Key Regenerated');
@@ -749,6 +760,17 @@ export default function StorageSync({ darkMode, triggerRefresh }: StorageSyncPro
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {isSupabaseConfigured ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 text-[11px] font-mono font-bold uppercase tracking-wider">
+                <Cloud className="w-3.5 h-3.5 shrink-0" />
+                <span>Supabase Realtime</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 text-amber-400 text-[11px] font-mono font-bold uppercase tracking-wider">
+                <Cloud className="w-3.5 h-3.5 shrink-0" />
+                <span>Fallback KV</span>
+              </div>
+            )}
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-mono font-bold uppercase tracking-wider ${getStatusColor()}`}>
               <span className="w-2 h-2 rounded-full bg-current"></span>
               <span>{syncState.status}</span>

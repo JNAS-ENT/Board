@@ -59,6 +59,14 @@ export default function Kanban({ darkMode, triggerRefresh }: KanbanProps) {
 
   useEffect(() => {
     loadBoard();
+
+    const handleDbUpdated = () => {
+      loadBoard();
+    };
+    window.addEventListener('jnas_db_updated', handleDbUpdated);
+    return () => {
+      window.removeEventListener('jnas_db_updated', handleDbUpdated);
+    };
   }, []);
 
   // Save/Update Card

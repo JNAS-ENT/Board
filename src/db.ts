@@ -79,6 +79,11 @@ class WorkspaceDB {
     });
   }
 
+  // Public generic getter for dynamic syncing
+  public getStoreItems<T>(storeName: string): Promise<T[]> {
+    return this.getAll<T>(storeName);
+  }
+
   // Generic helper for putting an item in a store
   private put<T>(storeName: string, item: T): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -96,6 +101,48 @@ class WorkspaceDB {
     });
   }
 
+  // Public direct bypass methods for Sync Engine to prevent recursive loop
+  public putItemDirect<T>(storeName: string, item: T): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        const store = this.getStore(storeName, 'readwrite');
+        const request = store.put(item);
+        request.onsuccess = () => {
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  public deleteItemDirect(storeName: string, id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        const store = this.getStore(storeName, 'readwrite');
+        const request = store.delete(id);
+        request.onsuccess = () => {
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  private trackDeletion(storeName: string, id: string) {
+    try {
+      const pendingStr = localStorage.getItem('jnas_pending_deletes') || '[]';
+      const pending = JSON.parse(pendingStr);
+      pending.push({ storeName, id, timestamp: new Date().toISOString() });
+      localStorage.setItem('jnas_pending_deletes', JSON.stringify(pending));
+    } catch (err) {
+      console.error('Error tracking deletion:', err);
+    }
+  }
+
   // Generic helper for deleting an item from a store
   private delete(storeName: string, id: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -103,6 +150,7 @@ class WorkspaceDB {
         const store = this.getStore(storeName, 'readwrite');
         const request = store.delete(id);
         request.onsuccess = () => {
+          this.trackDeletion(storeName, id);
           if (this.onModified) this.onModified();
           resolve();
         };

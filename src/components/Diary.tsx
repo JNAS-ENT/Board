@@ -40,6 +40,14 @@ export default function Diary({ darkMode, triggerRefresh }: DiaryProps) {
 
   useEffect(() => {
     loadEntries();
+
+    const handleDbUpdated = () => {
+      loadEntries(false);
+    };
+    window.addEventListener('jnas_db_updated', handleDbUpdated);
+    return () => {
+      window.removeEventListener('jnas_db_updated', handleDbUpdated);
+    };
   }, []);
 
   const loadEntries = async (selectFirst = true) => {
