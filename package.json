@@ -9,7 +9,7 @@
     "preview": "vite preview --port 3000 --host 0.0.0.0",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "deploy": "wrangler pages deploy dist",
+    "deploy": "wrangler deploy",
     "pages:dev": "wrangler pages dev dist"
   },
   "dependencies": {
