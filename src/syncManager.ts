@@ -60,8 +60,8 @@ class SyncManager {
 
     // Check for workspace deep-linking in URL on startup
     const urlParams = new URLSearchParams(window.location.search);
-    const urlWorkspaceId = urlParams.get('workspaceId');
-    const urlRecoveryKey = urlParams.get('recoveryKey');
+    const urlWorkspaceId = urlParams.get('workspaceId') || urlParams.get('w');
+    const urlRecoveryKey = urlParams.get('recoveryKey') || urlParams.get('k');
 
     if (urlWorkspaceId && urlRecoveryKey) {
       console.log('Detected deep-linked workspace in URL. Connecting...');
@@ -72,14 +72,16 @@ class SyncManager {
         this.connectToWorkspace(urlWorkspaceId, urlRecoveryKey)
           .then((success) => {
             if (success) {
-              console.log('Successfully connected to deep-linked workspace! Reloading components...');
-              window.location.reload();
+              console.log('Successfully connected to deep-linked workspace!');
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('jnas_db_updated'));
+              }
             }
           })
           .catch(err => {
             console.error('Failed to auto-connect to deep-linked workspace:', err);
           });
-      }, 500);
+      }, 300);
       return;
     }
 
@@ -95,6 +97,7 @@ class SyncManager {
       localStorage.setItem('jnas_workspace_id', storedId);
       localStorage.setItem('jnas_recovery_key', storedKey);
       localStorage.removeItem('jnas_last_synced_at'); // Reset to force merge
+      localStorage.setItem('jnas_needs_sync', 'false');
     }
 
     if (!storedId || !storedKey) {
@@ -103,14 +106,16 @@ class SyncManager {
 
       localStorage.setItem('jnas_workspace_id', storedId);
       localStorage.setItem('jnas_recovery_key', storedKey);
-      localStorage.setItem('jnas_last_modified_at', new Date().toISOString());
+      // DO NOT set last_modified_at to now for fresh initialization to prevent overwriting cloud KV
+      localStorage.setItem('jnas_last_modified_at', '1970-01-01T00:00:00.000Z');
+      localStorage.setItem('jnas_needs_sync', 'false');
     }
 
     this.workspaceId = storedId;
     this.recoveryKey = storedKey;
     this.recoveryKeyHash = await hashPassword(storedKey);
     this.lastSyncedAt = localStorage.getItem('jnas_last_synced_at');
-    this.lastModifiedAt = localStorage.getItem('jnas_last_modified_at') || new Date().toISOString();
+    this.lastModifiedAt = localStorage.getItem('jnas_last_modified_at') || '1970-01-01T00:00:00.000Z';
     this.status = navigator.onLine ? 'idle' : 'offline';
 
     // Start real-time subscriptions if configured
@@ -118,8 +123,20 @@ class SyncManager {
 
     // Trigger initial check/sync
     setTimeout(() => {
-      this.syncNow().catch(err => console.error('Initial sync error:', err));
-    }, 1000);
+      this.syncNow(true).catch(err => console.error('Initial sync error:', err));
+    }, 500);
+
+    // Auto-sync whenever tab becomes visible or focused
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        this.syncNow(true).catch(err => console.error('[Visibility Sync] Failed:', err));
+      }
+    });
+    window.addEventListener('focus', () => {
+      if (navigator.onLine) {
+        this.syncNow(true).catch(err => console.error('[Focus Sync] Failed:', err));
+      }
+    });
   }
 
   getCredentials(): { workspaceId: string; recoveryKey: string } {
@@ -649,14 +666,29 @@ class SyncManager {
   }
 
   /**
-   * Legacy fallbacks for cloud-synchronization when Supabase is not configured yet.
+   * Cloud synchronization logic using Cloudflare KV REST endpoints.
    */
   private async syncNowFallback(force = false): Promise<void> {
     try {
       const res = await fetch(`/api/sync?workspaceId=${this.workspaceId}&recoveryKey=${this.recoveryKey}`);
       
       if (res.status === 404) {
-        await this.pushLocalToServerFallback();
+        // Workspace not found on server yet. If local DB has content, push it.
+        const localDbStr = await db.exportDB();
+        const localData = localDbStr ? JSON.parse(localDbStr) : {};
+        const localHasData = (
+          (localData.diary?.length || 0) > 0 ||
+          (localData.kanban_cards?.length || 0) > 0 ||
+          (localData.whiteboard?.length || 0) > 0 ||
+          (localData.resources?.length || 0) > 0 ||
+          (localData.code_snippets?.length || 0) > 0
+        );
+        if (localHasData) {
+          await this.pushLocalToServerFallback();
+        } else {
+          localStorage.setItem('jnas_needs_sync', 'false');
+          this.updateStatus('idle');
+        }
         return;
       }
 
@@ -666,17 +698,32 @@ class SyncManager {
       }
 
       const remote = (await res.json()) as any;
-      
+      const needsSync = localStorage.getItem('jnas_needs_sync') === 'true';
+
+      const localDbStr = await db.exportDB();
+      const localData = localDbStr ? JSON.parse(localDbStr) : {};
+      const localHasData = (
+        (localData.diary?.length || 0) > 0 ||
+        (localData.kanban_cards?.length || 0) > 0 ||
+        (localData.whiteboard?.length || 0) > 0 ||
+        (localData.resources?.length || 0) > 0 ||
+        (localData.code_snippets?.length || 0) > 0
+      );
+
       const localModifiedTime = new Date(this.lastModifiedAt).getTime();
       const remoteModifiedTime = new Date(remote.updatedAt).getTime();
 
-      if (force || remoteModifiedTime > localModifiedTime || !this.lastSyncedAt) {
+      // Always pull and merge remote data if:
+      // 1. Forced
+      // 2. Local has no data (empty IndexedDB)
+      // 3. User has no unpushed local modifications (needsSync is false)
+      // 4. Remote KV data is newer than local timestamp
+      if (force || !localHasData || !needsSync || remoteModifiedTime >= localModifiedTime) {
         await this.pullAndMergeRemoteFallback(remote.dbData, remote.updatedAt);
-      } else if (localModifiedTime > remoteModifiedTime) {
-        await this.pushLocalToServerFallback();
       } else {
-        localStorage.setItem('jnas_needs_sync', 'false');
-        this.updateStatus('idle');
+        // Local has unpushed changes AND local timestamp is newer:
+        // Perform a pull-and-merge to combine local + remote without losing data, then store back to KV
+        await this.pullAndMergeRemoteFallback(remote.dbData, remote.updatedAt);
       }
     } catch (err: any) {
       console.error('REST API Sync Fallback failed:', err);
@@ -702,7 +749,7 @@ class SyncManager {
 
     if (response.status === 409) {
       this.updateStatus('idle');
-      return this.syncNow();
+      return this.syncNow(true);
     }
 
     if (!response.ok) {
@@ -711,7 +758,9 @@ class SyncManager {
     }
 
     this.lastSyncedAt = now;
+    this.lastModifiedAt = now;
     localStorage.setItem('jnas_last_synced_at', now);
+    localStorage.setItem('jnas_last_modified_at', now);
     localStorage.setItem('jnas_needs_sync', 'false');
     this.updateStatus('idle');
   }
@@ -719,16 +768,16 @@ class SyncManager {
   private async pullAndMergeRemoteFallback(remoteDbDataStr: string, remoteUpdatedAt: string): Promise<void> {
     try {
       const localDbDataStr = await db.exportDB();
-      const local = JSON.parse(localDbDataStr);
-      const remote = JSON.parse(remoteDbDataStr);
+      const local = localDbDataStr ? JSON.parse(localDbDataStr) : {};
+      const remote = remoteDbDataStr ? JSON.parse(remoteDbDataStr) : {};
 
       await this.createAutoBackup('pre-merge-backup');
 
       const merged: any = {};
 
       const mergeTable = (tableName: string, keyField = 'id', compareField?: string) => {
-        const localList = local[tableName] || [];
-        const remoteList = remote[tableName] || [];
+        const localList = Array.isArray(local[tableName]) ? local[tableName] : [];
+        const remoteList = Array.isArray(remote[tableName]) ? remote[tableName] : [];
         const map = new Map<string, any>();
 
         localList.forEach((item: any) => {
@@ -746,7 +795,7 @@ class SyncManager {
           } else if (compareField && remoteItem[compareField] && localItem[compareField]) {
             const remoteTime = new Date(remoteItem[compareField]).getTime();
             const localTime = new Date(localItem[compareField]).getTime();
-            if (remoteTime > localTime) {
+            if (remoteTime >= localTime) {
               map.set(remoteItem[keyField], remoteItem);
             }
           } else {
@@ -758,18 +807,19 @@ class SyncManager {
       };
 
       mergeTable('diary', 'id', 'updatedAt');
-      mergeTable('kanban_columns', 'id');
-      mergeTable('kanban_cards', 'id');
-      mergeTable('whiteboard', 'id');
+      mergeTable('kanban_columns', 'id', 'updatedAt');
+      mergeTable('kanban_cards', 'id', 'updatedAt');
+      mergeTable('whiteboard', 'id', 'updatedAt');
       mergeTable('resources', 'id', 'createdAt');
       mergeTable('code_snippets', 'id', 'createdAt');
       mergeTable('activities', 'id', 'timestamp');
 
-      await db.importDB(JSON.stringify(merged));
-
       const mergedDbStr = JSON.stringify(merged);
+      await db.importDB(mergedDbStr);
+
       const now = new Date().toISOString();
 
+      // Always save merged database back to Cloud KV so KV has the complete set of data
       await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -787,15 +837,25 @@ class SyncManager {
       localStorage.setItem('jnas_last_modified_at', now);
       localStorage.setItem('jnas_needs_sync', 'false');
       this.updateStatus('idle');
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('jnas_db_updated'));
+      }
     } catch (err) {
       console.error('Merge fallback failure:', err);
-      await db.importDB(remoteDbDataStr);
-      this.lastSyncedAt = remoteUpdatedAt;
-      this.lastModifiedAt = remoteUpdatedAt;
-      localStorage.setItem('jnas_last_synced_at', remoteUpdatedAt);
-      localStorage.setItem('jnas_last_modified_at', remoteUpdatedAt);
+      if (remoteDbDataStr) {
+        await db.importDB(remoteDbDataStr);
+      }
+      this.lastSyncedAt = remoteUpdatedAt || new Date().toISOString();
+      this.lastModifiedAt = this.lastSyncedAt;
+      localStorage.setItem('jnas_last_synced_at', this.lastSyncedAt);
+      localStorage.setItem('jnas_last_modified_at', this.lastSyncedAt);
       localStorage.setItem('jnas_needs_sync', 'false');
       this.updateStatus('idle');
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('jnas_db_updated'));
+      }
     }
   }
 
