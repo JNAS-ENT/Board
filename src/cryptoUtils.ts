@@ -151,7 +151,7 @@ export async function getIpAddress(): Promise<string> {
   try {
     const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
-      const data = await res.json();
+      const data = (await res.json()) as any;
       cachedIp = data.ip || 'Local Network';
       return cachedIp;
     }

@@ -166,7 +166,7 @@ export default function Dashboard({ darkMode, onNavigate, triggerRefresh }: Dash
         body: JSON.stringify({ url: finalUrl })
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as any;
       const meta = data.metadata || {
         title: finalUrl,
         category: 'url',

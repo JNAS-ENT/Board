@@ -13,11 +13,19 @@ const DB_VERSION = 1;
 
 class WorkspaceDB {
   private db: IDBDatabase | null = null;
+  private initPromise: Promise<void> | null = null;
   public onModified: (() => void) | null = null;
   public onSyncItem: ((storeName: string, item: any, action: 'put' | 'delete') => void) | null = null;
 
   init(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    if (this.db) {
+      return Promise.resolve();
+    }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onupgradeneeded = (event) => {
@@ -53,9 +61,12 @@ class WorkspaceDB {
       };
 
       request.onerror = () => {
+        this.initPromise = null;
         reject(request.error);
       };
     });
+
+    return this.initPromise;
   }
 
   private getStore(storeName: string, mode: IDBTransactionMode = 'readonly'): IDBObjectStore {
@@ -67,7 +78,8 @@ class WorkspaceDB {
   }
 
   // Generic helper for getting all items from a store
-  private getAll<T>(storeName: string): Promise<T[]> {
+  private async getAll<T>(storeName: string): Promise<T[]> {
+    await this.init();
     return new Promise((resolve, reject) => {
       try {
         const store = this.getStore(storeName, 'readonly');
@@ -86,7 +98,8 @@ class WorkspaceDB {
   }
 
   // Generic helper for putting an item in a store
-  private put<T>(storeName: string, item: T): Promise<void> {
+  private async put<T>(storeName: string, item: T): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       try {
         const store = this.getStore(storeName, 'readwrite');
@@ -104,7 +117,8 @@ class WorkspaceDB {
   }
 
   // Public direct bypass methods for Sync Engine to prevent recursive loop
-  public putItemDirect<T>(storeName: string, item: T): Promise<void> {
+  public async putItemDirect<T>(storeName: string, item: T): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       try {
         const store = this.getStore(storeName, 'readwrite');
@@ -119,7 +133,8 @@ class WorkspaceDB {
     });
   }
 
-  public deleteItemDirect(storeName: string, id: string): Promise<void> {
+  public async deleteItemDirect(storeName: string, id: string): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       try {
         const store = this.getStore(storeName, 'readwrite');
@@ -146,7 +161,8 @@ class WorkspaceDB {
   }
 
   // Generic helper for deleting an item from a store
-  private delete(storeName: string, id: string): Promise<void> {
+  private async delete(storeName: string, id: string): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       try {
         const store = this.getStore(storeName, 'readwrite');
@@ -277,7 +293,8 @@ class WorkspaceDB {
     return this.put('whiteboard', updatedElem);
   }
 
-  saveWhiteboardElements(elements: WhiteboardElement[]): Promise<void> {
+  async saveWhiteboardElements(elements: WhiteboardElement[]): Promise<void> {
+    await this.init();
     const now = new Date().toISOString();
     const updatedElements = elements.map(elem => ({
       ...elem,
@@ -311,7 +328,8 @@ class WorkspaceDB {
     return this.delete('whiteboard', id);
   }
 
-  clearWhiteboard(): Promise<void> {
+  async clearWhiteboard(): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not initialized'));
       
@@ -432,7 +450,8 @@ class WorkspaceDB {
     return this.put('activities', activity);
   }
 
-  clearActivities(): Promise<void> {
+  async clearActivities(): Promise<void> {
+    await this.init();
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not initialized'));
       const transaction = this.db.transaction('activities', 'readwrite');
@@ -735,6 +754,7 @@ Started architectural drafting of the productivity applet.
   }
 
   async importDB(jsonStr: string): Promise<void> {
+    await this.init();
     const data = JSON.parse(jsonStr);
     
     if (!this.db) throw new Error('Database not initialized');

@@ -388,11 +388,11 @@ class SyncManager {
         const res = await fetch(`/api/sync?workspaceId=${targetWorkspaceId}&recoveryKey=${targetRecoveryKey}`);
         
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
+          const errData = (await res.json().catch(() => ({}))) as any;
           throw new Error(errData.error || 'Failed to locate workspace. Please verify your keys.');
         }
 
-        const remote = await res.json();
+        const remote = (await res.json()) as any;
         
         await this.createAutoBackup('pre-connect-backup');
 
@@ -661,11 +661,11 @@ class SyncManager {
       }
 
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
+        const errorData = (await res.json().catch(() => ({}))) as any;
         throw new Error(errorData.error || `Server responded with ${res.status}`);
       }
 
-      const remote = await res.json();
+      const remote = (await res.json()) as any;
       
       const localModifiedTime = new Date(this.lastModifiedAt).getTime();
       const remoteModifiedTime = new Date(remote.updatedAt).getTime();
@@ -706,7 +706,7 @@ class SyncManager {
     }
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
+      const errData = (await response.json().catch(() => ({}))) as any;
       throw new Error(errData.error || `Push fallback failed with status ${response.status}`);
     }
 

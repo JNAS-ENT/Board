@@ -57,31 +57,36 @@ export default function App() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        // 1. Fetch dynamic Supabase credentials from the Cloudflare server environment
-        const configRes = await fetch('/api/config');
-        const config = await configRes.json();
-        
-        if (config && config.isConfigured) {
-          configureSupabase(config.supabaseUrl, config.supabaseAnonKey);
-          // Register dynamic configure and trigger setup
-          await syncManager.onSupabaseConfigured();
-        }
-      } catch (err) {
-        console.warn('[Startup] Dynamic Supabase config retrieval skipped/failed:', err);
-      } finally {
-        try {
-          // 2. Initialize local database
-          await db.init();
+        // 1. Initialize local IndexedDB database first
+        await db.init();
 
-          // 3. On startup, download the latest workspace from Supabase before rendering local data
+        let initialSyncDone = false;
+
+        // 2. Fetch dynamic Supabase credentials from the Cloudflare server environment
+        try {
+          const configRes = await fetch('/api/config');
+          const config = (await configRes.json()) as any;
+          
+          if (config && config.isConfigured) {
+            configureSupabase(config.supabaseUrl, config.supabaseAnonKey);
+            // Register dynamic configure and trigger setup
+            await syncManager.onSupabaseConfigured();
+            initialSyncDone = true;
+          }
+        } catch (err) {
+          console.warn('[Startup] Dynamic Supabase config retrieval skipped/failed:', err);
+        }
+
+        // 3. On startup, perform initial synchronization if not already performed
+        if (!initialSyncDone) {
           console.log('[Startup] Performing initial startup synchronization...');
           await syncManager.syncNow(true);
-          
-          setDbInitialized(true);
-        } catch (err: any) {
-          console.error("Failed to initialize system database:", err);
-          setDbError(err?.message || String(err));
         }
+        
+        setDbInitialized(true);
+      } catch (err: any) {
+        console.error("Failed to initialize system database:", err);
+        setDbError(err?.message || String(err));
       }
     };
 

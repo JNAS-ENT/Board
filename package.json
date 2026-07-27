@@ -1,5 +1,5 @@
 {
-  "name": "board",
+  "name": "react-example",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,7 +10,7 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "deploy": "wrangler deploy",
-    "pages:dev": "wrangler pages dev dist"
+    "worker:dev": "wrangler dev"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -29,6 +29,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260727.1",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
     "autoprefixer": "^10.4.21",
