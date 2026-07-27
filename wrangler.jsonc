@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "myboard",
+  "name": "board",
   "main": "src/worker.ts",
   "assets": {
     "directory": "./dist",
